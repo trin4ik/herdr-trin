@@ -1,0 +1,56 @@
+# Публичный журнал
+
+## 2026-11-06 — первый публичный набор
+
+- Репозиторий: https://github.com/trin4ik/herdr-trin, основная ветка `main`.
+  Набор включает native layout/mods, Go quota-hub, Compose, установщик, тесты,
+  инструкции и лицензии. Персональные инструкции/история, runtime state,
+  credentials, старые снимки и макеты не включены.
+- Перед публикацией повторно проверены 163 файла: privacy gate и Gitleaks 8.30.1
+  (redacted) без находок. Авторский email коммита — GitHub noreply.
+- Результаты offline/native/Docker-проверок и непроверенные состояния перечислены
+  ниже; публикация исходников не означает deployment сервиса или повторный
+  live provider smoke. Действующие личные сервисы и сессии не меняются.
+
+## 2026-11-06 — cleanup перед просмотром
+
+- Удалены исторические макеты/шрифты/снимки, выполненный task-промпт, пустые
+  заготовки модов, Python cache и неиспользуемые копии стандартных Brand SVG.
+  Сохранены рабочие assets, лицензии и regression-тесты; runtime-логика не менялась.
+- Проведена проверка внешних команд: используются штатные Herdr/curl/Python,
+  стандартный Git в старом Spaces; приватные wrapper/task CLI не требуются.
+  README содержит явные требования внешней установки.
+- Privacy gate обобщён без персональных имён/хостов в самом сканере, добавлены
+  portability-регрессии. В 163 публичных файлах privacy gate и Gitleaks 8.30.1
+  (redacted) — 0 findings. Чистый snapshot проходит 198 layout JS, 70 Python,
+  7 installer/portability checks и go vet; отдельно проходят 24 bridge JS и
+  Go race tests (cached, backend не менялся).
+- Native-check шести активных модов и просмотр живого снимка подтверждают
+  сохранение текущего UI после удаления assets. Pointer/keyboard, маленькое
+  окно, светлая тема и новая установка повторно не проверены. Личные runtime
+  проекты/сессии не менялись; commit/remote/push/публикация не выполнены.
+
+## 2026-11-06 — подготовка монорепозитория
+
+- Объединены `layout/trin` и исходники `quota-hub`; личная миграция очищена,
+  адрес квот по умолчанию локальный. Добавлены Compose, Dockerfile, примеры,
+  установка layout, контракт и правила приватности; персональный архив не включён.
+- Личный endpoint вынесен в native shared override (`endpoint--<encoded URL>` /
+  `reset-endpoint`), без второй копии исходников и персонального адреса в Git.
+  Смена сервиса очищает кеш и отбрасывает поздний ответ прежнего источника.
+- Собственный код — MIT по выбору владельца; оригинальные Herdr части сохраняют
+  Apache-2.0 и attribution. Право распространения Deliva с layout подтверждено;
+  фирменный знак исключён из MIT. Сторонние license notices сохранены.
+- Проверен чистый публичный набор без ignored файлов: 198 layout JS, 70 Python,
+  4 installer-теста, 24 bridge JS, 609 Go test/subtest pass с race, `go vet`.
+  Gitleaks 8.30.1 (redacted) и локальная privacy-проверка — без находок; это
+  результаты сканеров, не гарантия полного отсутствия уязвимостей/секретов.
+- Проходят native checks шести активных модов и Compose config validation.
+  Docker-образ собран Linux/amd64; одноразовые check-config и HTTP schema smoke
+  выполнены с network=none, без host credentials/mounts/опубликованных портов.
+  Missing credentials не превращаются в успешные нулевые квоты.
+- Живой UI-снимок подтвердил сохранение Projects/Agents и строк квот через личный
+  endpoint. Малое окно, реальные pointer/keyboard, светлая тема и чистая GUI
+  установка не перепроверялись. Реальный provider smoke в Docker, macOS Keychain,
+  Docker arm64 и Ollama/Kimi container networking не проверены; ограничения
+  описаны. Удалённый рабочий сервис не изменялся. Commit/remote/push не выполнены.

@@ -1,0 +1,12 @@
+{
+  "limits": [
+    {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+     "detail": {"limit": "100", "remaining": "40", "resetTime": "2026-11-04T11:52:10.935312Z"}},
+    {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+     "detail": {"limit": "100", "remaining": "10", "resetTime": "2026-11-04T11:52:10Z"}},
+    {"window": {"duration": 1, "timeUnit": "TIME_UNIT_MONTH"},
+     "detail": {"limit": 100, "remaining": 90}},
+    {"window": {"duration": 7, "timeUnit": "TIME_UNIT_DAY"},
+     "detail": {"limit": 100, "remaining": 75}}
+  ]
+}

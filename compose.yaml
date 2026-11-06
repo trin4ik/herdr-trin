@@ -1,0 +1,38 @@
+name: herdr-trin
+services:
+  quota-hub:
+    build:
+      context: ./quota-hub
+    ports:
+      - "127.0.0.1:8098:8098"
+    command: ["-config", "/etc/quota-hub/config.json"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: ${QUOTA_CONFIG:-./quota-hub/configs/docker.json}
+        target: /etc/quota-hub/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # Directory mounts see atomic credential replacement by the owning CLI.
+      # Missing directories fail instead of silently creating credential paths.
+      - type: bind
+        source: ${CODEX_DIR:-${HOME}/.codex}
+        target: /credentials/codex
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CLAUDE_DIR:-${HOME}/.claude}
+        target: /credentials/claude
+        read_only: true
+        bind:
+          create_host_path: false
+      - quota-state:/var/lib/quota-hub
+    stop_grace_period: 15s
+volumes:
+  quota-state:

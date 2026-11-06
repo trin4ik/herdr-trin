@@ -1,0 +1,11 @@
+{
+  "plan_type": "pro",
+  "rate_limit": {
+    "primary_window": {"used_percent": 10.5, "limit_window_seconds": 604800, "reset_after_seconds": 3600},
+    "secondary_window": {"used_percent": 20, "limit_window_seconds": 18000, "reset_at": 1794343662}
+  },
+  "code_review_rate_limit": {"primary_window": {"used_percent": 5, "limit_window_seconds": 604800, "reset_at": 1794343662}},
+  "additional_rate_limits": [
+    {"limit_name": "GPT-6 Astra", "rate_limit": {"primary_window": {"used_percent": 50, "limit_window_seconds": 18000, "reset_at": 1794343662}}}
+  ]
+}

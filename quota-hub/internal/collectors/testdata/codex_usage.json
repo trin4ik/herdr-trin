@@ -1,0 +1,15 @@
+{
+  "user_id": "user-test",
+  "account_id": "acct-test",
+  "email": "user@example.invalid",
+  "plan_type": "prolite",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {"used_percent": 32, "limit_window_seconds": 604800, "reset_after_seconds": 558953, "reset_at": 1794343662},
+    "secondary_window": null
+  },
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": {"has_credits": true, "unlimited": false, "balance": "12.5"}
+}

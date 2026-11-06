@@ -1,0 +1,12 @@
+{
+  "limits": [
+    {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+     "detail": {"limit": "100", "remaining": "100", "resetTime": "2026-11-04T11:52:10.935312Z"}}
+  ],
+  "booster_wallet": {"id": "wallet-test", "userId": "user-test", "status": "ACTIVE"},
+  "usages": {
+    "limit_5h": {"used_ratio": 0, "reset_time": "2026-11-04 11:52:10"},
+    "limit_month_total": {"used_ratio": 0.1125, "reset_time": "2026-11-24 00:00:00"},
+    "limit_month_code": {"used_ratio": "0.1125", "reset_time": "2026-11-24T00:00:00Z"}
+  }
+}

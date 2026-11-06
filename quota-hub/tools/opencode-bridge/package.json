@@ -1,0 +1,13 @@
+{
+  "name": "quota-hub-opencode-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persistent passive OpenCode http.response bridge: latest sanitized Claude subscription-window observation.",
+  "exports": {
+    ".": "./server.ts"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  }
+}

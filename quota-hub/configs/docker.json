@@ -1,0 +1,27 @@
+{
+  "listen": "0.0.0.0:8098",
+  "allow_wildcard_listen": true,
+  "http_auth": "none",
+  "publish_account_email": false,
+  "data_dir": "/var/lib/quota-hub",
+  "opencode": {},
+  "subscriptions": [
+    {
+      "id": "codex-primary", "provider": "codex", "enabled": true,
+      "credential_file": "/credentials/codex/auth.json",
+      "interval": "5m", "stale_after": "30m"
+    },
+    {
+      "id": "claude-primary", "provider": "claude", "enabled": true,
+      "observed_file": "/bridge/claude.latest.json",
+      "interval": "5m", "observe_interval": "30s", "stale_after": "30m",
+      "claude_fallback": {
+        "enabled": true,
+        "credential_file": "/credentials/claude/.credentials.json",
+        "idle_after": "10m"
+      }
+    },
+    { "id": "ollama-primary", "provider": "ollama", "enabled": false, "integration_id": "ollama-cloud" },
+    { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" }
+  ]
+}

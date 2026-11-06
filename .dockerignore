@@ -1,0 +1,3 @@
+**
+!compose.yaml
+# Backend image is built with quota-hub/ as its isolated context.

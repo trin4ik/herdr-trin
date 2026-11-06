@@ -1,0 +1,3 @@
+{"usages": {"limit_5h": {"used_ratio": 0.2, "reset_time": "2026-11-04 11:52:10"},
+            "limit_extra": {"used_ratio": 0.5},
+            "limit_bad": {"used_ratio": "n/a"}}}

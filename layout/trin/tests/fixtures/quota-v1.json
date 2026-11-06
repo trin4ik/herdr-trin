@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-04T10:00:00Z",
+  "subscriptions": [
+    { "id": "codex-primary", "provider": "codex", "plan": "pro", "status": "ok", "stale": false,
+      "last_success_at": "2026-11-04T09:58:00Z", "last_attempt_at": "2026-11-04T09:57:59Z", "stale_after": "2026-11-04T10:28:00Z",
+      "quotas": [{ "id": "weekly", "used_percent": 37, "remaining_percent": 63, "window": { "period": "week", "duration_seconds": 604800, "reset_at": "2026-11-10T20:00:00Z" } }],
+      "metrics": [{ "id": "credits_balance", "metric": "balance", "unit": "credits", "value": 10 }] },
+    { "id": "ollama-primary", "provider": "ollama", "status": "ok", "stale": false, "last_success_at": "2026-11-04T09:58:00Z",
+      "quotas": [
+        { "id": "session", "used_percent": 0, "remaining_percent": 100, "window": { "kind": "unknown", "period": null, "duration_seconds": null, "reset_at": "2026-11-04T16:00:00Z" } },
+        { "id": "weekly", "used_percent": 0.55, "remaining_percent": 99.45, "window": { "period": "week" } }
+      ] },
+    { "id": "kimi-primary", "provider": "kimi", "status": "ok", "stale": false, "last_success_at": "2026-11-04T09:58:00Z",
+      "quotas": [
+        { "id": "limit_5h", "used_percent": 0.06, "remaining_percent": 99.94, "window": { "duration_seconds": 18000 } },
+        { "id": "limit_month_code", "scope": "code", "used_percent": 11.25, "remaining_percent": 88.75, "window": { "period": "month" } },
+        { "id": "limit_month_total", "scope": "total", "used_percent": 12, "remaining_percent": 88, "window": { "period": "month" } }
+      ] },
+    { "id": "claude-primary", "provider": "claude", "status": "ok", "stale": false, "last_success_at": "2026-11-04T09:58:00Z",
+      "quotas": [
+        { "id": "five_hour", "used_percent": 4, "remaining_percent": 96, "window": { "duration_seconds": 18000 } },
+        { "id": "seven_day", "used_percent": 53, "remaining_percent": 47, "window": { "duration_seconds": 604800 } }
+      ] }
+  ]
+}

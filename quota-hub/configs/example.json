@@ -1,0 +1,19 @@
+{
+  "listen": "127.0.0.1:8098",
+  "http_auth": "bearer",
+  "http_token_env": "QUOTA_HUB_HTTP_TOKEN",
+  "publish_account_email": false,
+  "data_dir": "/absolute/path/to/private/quota-state",
+  "opencode": { "service_file": "/absolute/path/to/.local/state/opencode/service.json" },
+  "subscriptions": [
+    { "id": "codex-primary", "provider": "codex", "enabled": true, "credential_file": "/absolute/path/to/.codex/auth.json", "interval": "5m", "stale_after": "30m" },
+    { "id": "ollama-primary", "provider": "ollama", "enabled": false, "integration_id": "ollama-cloud" },
+    { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" },
+    {
+      "id": "claude-primary", "provider": "claude", "enabled": false,
+      "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
+      "interval": "5m", "observe_interval": "30s",
+      "claude_fallback": { "enabled": true, "credential_file": "/absolute/path/to/.claude/.credentials.json", "idle_after": "10m" }
+    }
+  ]
+}

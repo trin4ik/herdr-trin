@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": "opencode-http-response-hook",
+  "observed_at": "2026-11-04T09:19:49.568Z",
+  "provider_id": "anthropic",
+  "status": 200,
+  "quota": [
+    {"name": "anthropic-ratelimit-unified-5h-reset", "family": "subscription_candidate", "type": "time", "value": "2026-11-04T10:30:00.000Z"},
+    {"name": "anthropic-ratelimit-unified-5h-status", "family": "subscription_candidate", "type": "enum", "value": "allowed"},
+    {"name": "anthropic-ratelimit-unified-5h-utilization", "family": "subscription_candidate", "type": "number", "value": 0.38},
+    {"name": "anthropic-ratelimit-unified-7d-reset", "family": "subscription_candidate", "type": "time", "value": "2026-11-06T07:00:00.000Z"},
+    {"name": "anthropic-ratelimit-unified-7d-utilization", "family": "subscription_candidate", "type": "number", "value": 0.5},
+    {"name": "anthropic-ratelimit-unified-reset", "family": "subscription_candidate", "type": "time", "value": "2026-11-04T10:30:00.000Z"},
+    {"name": "anthropic-ratelimit-unified-fallback-percentage", "family": "subscription_candidate", "type": "number", "value": 0.5},
+    {"name": "x-unrelated-secret", "type": "enum", "value": "do-not-keep"}
+  ]
+}
