@@ -36,10 +36,14 @@ type claudeHybrid struct {
 	endpoint string
 	// accountPin is the lowercase hex sha256 of the expected oauthAccount.accountUuid; empty disables the pin.
 	accountPin string
+	// windows keeps the windows of both sources: the passive headers know the
+	// session and weekly windows, the native usage endpoint knows every window
+	// of the account, including the model-scoped ones.
+	windows windowSet
 }
 
 func newClaudeHybrid(spec Spec, b base, endpoint string) (*claudeHybrid, error) {
-	if spec.ObservedFile == "" || spec.CredentialFile == "" || spec.ClaudeIdleAfter < 0 {
+	if spec.ObservedFile == "" || spec.CredentialFile == "" {
 		return nil, fail(CodeConfigInvalid)
 	}
 	pin := strings.ToLower(strings.TrimSpace(spec.ClaudeExpectedAccountSHA256))
@@ -59,6 +63,8 @@ func (c *claudeHybrid) Observe(ctx context.Context) (model.Result, error) {
 		return model.Result{}, err
 	}
 	res.Source = SourceOpenCodeObserved
+	c.windows.setObserved(res.Quotas)
+	res.Quotas = c.windows.all()
 	return res, nil
 }
 
@@ -91,6 +97,8 @@ func (c *claudeHybrid) Fetch(parent context.Context) (model.Result, error) {
 		return model.Result{}, err
 	}
 	res.Source = SourceClaudeCodeOAuth
+	c.windows.setRemote(res.Quotas)
+	res.Quotas = c.windows.all()
 	// Attach the pinned local snapshot to a native usage response too. The engine
 	// also synchronizes it independently at startup/scans, without waiting for idle.
 	if p, metadataErr := c.localProfile(token); metadataErr == nil {
@@ -251,15 +259,167 @@ func (c *claudeHybrid) accessToken() (string, *model.ErrorInfo) {
 	return token, nil
 }
 
-// parseClaudeUsage reads the flat response: five_hour, seven_day, seven_day_<pool> ...
-// objects with utilization (already percent used) and optional resets_at. Absent or null
-// windows are skipped, never turned into zero. Newer limits[]/spend fields are not used,
-// so nothing is counted twice.
+// parseClaudeUsage reads the usage endpoint. The modern limits[] array is the
+// primary source: it carries every window the account has, including the
+// model-scoped ones. The flat five_hour/seven_day keys are the fallback for an
+// endpoint that does not report limits[], and are merged only where limits[] does
+// not already describe the same window, so nothing is counted twice.
 func parseClaudeUsage(body []byte, observed time.Time) (model.Result, error) {
 	top := asObject(body)
 	if top == nil {
 		return model.Result{}, failStatus(CodeInvalidResponse, http.StatusOK)
 	}
+	quotas, scoped := parseClaudeLimits(top, observed)
+	flat := parseClaudeFlat(top, observed)
+	for _, q := range flat {
+		if scoped && strings.HasPrefix(q.ID, "seven_day_") {
+			// The scoped pools are reported by limits[] only; the legacy flat
+			// pool keys would be the same windows under another name.
+			continue
+		}
+		duplicate := false
+		for _, existing := range quotas {
+			if existing.ID == q.ID {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			quotas = append(quotas, q)
+		}
+	}
+	return finish(observed, nil, quotas, nil, body)
+}
+
+// claudeLimitEntry is one window of the limits[] array.
+type claudeLimitEntry struct {
+	Kind     string   `json:"kind"`
+	Group    string   `json:"group"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt *string  `json:"resets_at"`
+	Scope    *struct {
+		Model *struct {
+			ID          *string `json:"id"`
+			DisplayName *string `json:"display_name"`
+		} `json:"model"`
+		Surface *string `json:"surface"`
+	} `json:"scope"`
+}
+
+// parseClaudeLimits reads the extensible limits[] array. An unknown kind is kept
+// as its own window with a neutral label instead of being dropped, so a limit
+// Anthropic adds later shows up without a code change.
+func parseClaudeLimits(top map[string]json.RawMessage, observed time.Time) ([]model.Quota, bool) {
+	raw, ok := top["limits"]
+	if !ok {
+		return nil, false
+	}
+	var entries []claudeLimitEntry
+	if json.Unmarshal(raw, &entries) != nil || len(entries) == 0 {
+		return nil, false
+	}
+	var quotas []model.Quota
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Percent == nil {
+			continue
+		}
+		used := *entry.Percent
+		if used < 0 || used > 100 {
+			continue
+		}
+		id, scope, label, w := claudeLimitWindow(entry)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if entry.ResetsAt != nil {
+			if t, ok := parseTimeString(*entry.ResetsAt); ok {
+				w.ResetAt = tptr(t)
+			}
+		}
+		q := percentQuota(id, scope, used, w)
+		q.Label = &label
+		q.ObservedAt = tptr(observed)
+		quotas = append(quotas, q)
+	}
+	return quotas, len(quotas) > 0
+}
+
+// claudeLimitWindow maps one limits[] entry to an id, a scope, a label and a
+// window. The ids match the passive header ids (five_hour, seven_day), so both
+// sources describe the same window and can be merged.
+func claudeLimitWindow(entry claudeLimitEntry) (string, *string, string, model.Window) {
+	w := unknownWindow()
+	kind := strings.ToLower(strings.TrimSpace(entry.Kind))
+	group := strings.ToLower(strings.TrimSpace(entry.Group))
+	switch kind {
+	case "session":
+		w.DurationSeconds = i64ptr(18000)
+		return "five_hour", nil, "Сессия", w
+	case "weekly_all":
+		w.Period = sptr("week")
+		w.DurationSeconds = i64ptr(604800)
+		return "seven_day", nil, "Неделя", w
+	case "weekly_scoped":
+		w.Period = sptr("week")
+		w.DurationSeconds = i64ptr(604800)
+		name, id := claudeScopedModel(entry)
+		if name == "" {
+			return "", nil, "", w
+		}
+		label := "Неделя"
+		return "seven_day_" + slug(id), sptr(name), label, w
+	}
+	// An unknown kind keeps its own window: the group still describes its length.
+	switch group {
+	case "session":
+		w.DurationSeconds = i64ptr(18000)
+	case "weekly", "week":
+		w.Period = sptr("week")
+		w.DurationSeconds = i64ptr(604800)
+	case "daily", "day":
+		w.Period = sptr("day")
+		w.DurationSeconds = i64ptr(86400)
+	case "monthly", "month":
+		w.Period = sptr("month")
+	}
+	id := slug(kind)
+	if id == "" {
+		return "", nil, "", w
+	}
+	if group != "" && group != kind {
+		id += "_" + slug(group)
+	}
+	label := kind
+	if label == "" {
+		label = "Лимит"
+	}
+	return id, nil, label, w
+}
+
+// claudeScopedModel returns the display name and the slug of the model a scoped
+// limit belongs to.
+func claudeScopedModel(entry claudeLimitEntry) (string, string) {
+	if entry.Scope == nil || entry.Scope.Model == nil {
+		return "", ""
+	}
+	if entry.Scope.Model.ID != nil && strings.TrimSpace(*entry.Scope.Model.ID) != "" {
+		name := *entry.Scope.Model.DisplayName
+		if strings.TrimSpace(name) == "" {
+			name = *entry.Scope.Model.ID
+		}
+		return name, *entry.Scope.Model.ID
+	}
+	if entry.Scope.Model.DisplayName != nil && strings.TrimSpace(*entry.Scope.Model.DisplayName) != "" {
+		return *entry.Scope.Model.DisplayName, *entry.Scope.Model.DisplayName
+	}
+	return "", ""
+}
+
+// parseClaudeFlat reads the legacy flat keys (five_hour, seven_day and their
+// pool suffixes).
+func parseClaudeFlat(top map[string]json.RawMessage, observed time.Time) []model.Quota {
 	keys := make([]string, 0, len(top))
 	for k := range top {
 		keys = append(keys, k)
@@ -288,9 +448,11 @@ func parseClaudeUsage(body []byte, observed time.Time) (model.Result, error) {
 		if t, ok := asTime(o["resets_at"]); ok {
 			win.ResetAt = tptr(t)
 		}
-		quotas = append(quotas, percentQuota(id, scope, used, win))
+		q := percentQuota(id, scope, used, win)
+		q.ObservedAt = tptr(observed)
+		quotas = append(quotas, q)
 	}
-	return finish(observed, nil, quotas, nil, body)
+	return quotas
 }
 
 // claudeUsageToken maps a flat key to the header-style token understood by claudeWindow.

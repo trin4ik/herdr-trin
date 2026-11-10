@@ -47,6 +47,12 @@ func localOrigin(raw string) (string, bool) {
 // restarted service with a new port or password is picked up without any CLI
 // or refresh step. Nothing read here is stored or returned in errors.
 func (o *openCodeKey) registration() (string, string, *model.ErrorInfo) {
+	return o.registrationFor("/api/credential")
+}
+
+// registrationFor reads the same registration for another local endpoint of the
+// same service. The path is a constant of this package, never a remote input.
+func (o *openCodeKey) registrationFor(path string) (string, string, *model.ErrorInfo) {
 	data, ok := readBounded(o.file, maxFileBytes)
 	if !ok {
 		return "", "", fail(CodeCredentialsUnavailable)
@@ -70,12 +76,12 @@ func (o *openCodeKey) registration() (string, string, *model.ErrorInfo) {
 	}
 	// A password is only decoded after the origin is known to be local.
 	if len(reg.Password) == 0 {
-		return origin + "/api/credential", "", nil
+		return origin + path, "", nil
 	}
 	var password string
 	if json.Unmarshal(reg.Password, &password) != nil || string(reg.Password) == "null" {
 		return "", "", fail(CodeCredentialsUnavailable)
 	}
 	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(serviceUsername+":"+password))
-	return origin + "/api/credential", auth, nil
+	return origin + path, auth, nil
 }

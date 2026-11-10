@@ -47,6 +47,17 @@ type Quota struct {
 	RemainingPercent *float64 `json:"remaining_percent"`
 	Window           Window   `json:"window"`
 	Authority        string   `json:"authority"`
+	// Label is an optional provider-supplied name of the window (a model, a budget).
+	Label *string `json:"label,omitempty"`
+	// Limited is false when the provider reports the window as uncapped.
+	Limited *bool `json:"limited,omitempty"`
+	// ObservedAt is when this window's value was last confirmed by the provider.
+	// It matters when windows of one subscription come from sources with different
+	// cadences: a window may be older than the subscription itself.
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	// Counters carries extra absolute values of a counter metric (tokens, cost).
+	// Only known keys are rendered; unknown keys are ignored by older clients.
+	Counters map[string]float64 `json:"counters,omitempty"`
 }
 
 type Window struct {

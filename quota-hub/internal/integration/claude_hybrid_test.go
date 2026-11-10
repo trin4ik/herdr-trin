@@ -62,7 +62,7 @@ func TestClaudeHeadersNativeOAuthAndCooldownComposeAcrossRestart(t *testing.T) {
 	writeHeader(now)
 	def := model.Definition{ID: "claude", Provider: "claude", Product: "claude_subscription", Source: "opencode_observed", StaleAfter: 30 * time.Minute}
 	spec := collectors.Spec{Definition: def, Interval: 5 * time.Minute, ObserveInterval: 30 * time.Second,
-		ClaudeIdleAfter: 10 * time.Minute, Timeout: time.Second, Scope: "claude", RateLimitPause: 15 * time.Minute,
+		ClaudeNative: true, Timeout: time.Second, Scope: "claude", RateLimitPause: 15 * time.Minute,
 		ObservedFile: observed, CredentialFile: creds, ClaudeAccountFile: account, ClaudeExpectedAccountSHA256: hex.EncodeToString(pin[:])}
 	collector, err := collectors.New(spec, collectors.Options{Now: clock, Endpoints: map[string]string{"claude": api.URL}})
 	if err != nil {
@@ -92,34 +92,34 @@ func TestClaudeHeadersNativeOAuthAndCooldownComposeAcrossRestart(t *testing.T) {
 		return sub
 	}
 	sub := poll()
-	if calls.Load() != 0 || sub.Source != "opencode_observed" || sub.LastPassiveAt == nil || !sub.LastPassiveAt.Equal(start) {
-		t.Fatal("fresh working response did not suppress the native GET")
+	if calls.Load() != 1 || sub.Source != "claude_code_oauth" || sub.LastPassiveAt == nil || !sub.LastPassiveAt.Equal(start) {
+		t.Fatal("the native GET must follow the subscription interval and the bridge clock must stay separate")
 	}
 	now = start.Add(10 * time.Minute)
 	sub = poll()
-	if calls.Load() != 1 || sub.Source != "claude_code_oauth" || !sub.LastPassiveAt.Equal(start) || !sub.LastSuccessAt.Equal(now) {
-		t.Fatal("idle fallback did not preserve separate bridge/API clocks")
+	if calls.Load() != 2 || sub.Source != "claude_code_oauth" || !sub.LastPassiveAt.Equal(start) || !sub.LastSuccessAt.Equal(now) {
+		t.Fatal("remote polling did not preserve separate bridge/API clocks")
 	}
 	now = start.Add(10*time.Minute + 30*time.Second)
 	sub = poll()
-	if calls.Load() != 1 || !sub.LastSuccessAt.Equal(start.Add(10*time.Minute)) {
+	if calls.Load() != 2 || !sub.LastSuccessAt.Equal(start.Add(10*time.Minute)) {
 		t.Fatal("unchanged old bridge freshened or replaced the OAuth snapshot")
 	}
 	now = start.Add(15 * time.Minute)
-	if sub = poll(); calls.Load() != 2 || !sub.LastPassiveAt.Equal(start) {
+	if sub = poll(); calls.Load() != 3 || !sub.LastPassiveAt.Equal(start) {
 		t.Fatal("API success incorrectly made the bridge look active")
 	}
 	limited.Store(true)
 	now = start.Add(20 * time.Minute)
 	sub = poll()
 	deadline := start.Add(80 * time.Minute)
-	if calls.Load() != 3 || sub.Error == nil || sub.Error.HTTPStatus != 429 || sub.NextPollAt == nil || sub.NextPollAt.Before(deadline) {
+	if calls.Load() != 4 || sub.Error == nil || sub.Error.HTTPStatus != 429 || sub.NextPollAt == nil || sub.NextPollAt.Before(deadline) {
 		t.Fatal("remote throttle deadline not exposed/preserved")
 	}
 	now = start.Add(20*time.Minute + 30*time.Second)
 	writeHeader(now)
 	sub = poll()
-	if calls.Load() != 3 || sub.Stale || sub.Error != nil || sub.Source != "opencode_observed" || sub.LastPollError == nil || sub.LastPollError.HTTPStatus != 429 || sub.NextPollAt.Before(deadline) {
+	if calls.Load() != 4 || sub.Stale || sub.Error != nil || sub.Source != "opencode_observed" || sub.LastPollError == nil || sub.LastPollError.HTTPStatus != 429 || sub.NextPollAt.Before(deadline) {
 		t.Fatal("remote cooldown blocked passive headers, or headers erased the cooldown")
 	}
 	s.Close()
@@ -130,16 +130,16 @@ func TestClaudeHeadersNativeOAuthAndCooldownComposeAcrossRestart(t *testing.T) {
 	e = makeEngine()
 	now = start.Add(21 * time.Minute)
 	writeHeader(now)
-	if sub = poll(); sub.Stale || calls.Load() != 3 || sub.NextPollAt.Before(deadline) {
+	if sub = poll(); sub.Stale || calls.Load() != 4 || sub.NextPollAt.Before(deadline) {
 		t.Fatal("restart lost the independent remote pause or blocked the passive reader")
 	}
 	now = start.Add(31 * time.Minute)
-	if sub = poll(); calls.Load() != 3 || !sub.LastSuccessAt.Equal(start.Add(21*time.Minute)) {
-		t.Fatal("idle scan bypassed a persisted 429 deadline")
+	if sub = poll(); calls.Load() != 4 || !sub.LastSuccessAt.Equal(start.Add(21*time.Minute)) {
+		t.Fatal("scan bypassed a persisted 429 deadline")
 	}
 	limited.Store(false)
 	now = start.Add(81 * time.Minute)
-	if sub = poll(); calls.Load() != 4 || sub.LastPollError != nil || sub.Source != "claude_code_oauth" {
+	if sub = poll(); calls.Load() != 5 || sub.LastPollError != nil || sub.Source != "claude_code_oauth" {
 		t.Fatal("polling did not recover after the real server deadline")
 	}
 	unchanged, err := os.ReadFile(creds)

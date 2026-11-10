@@ -68,7 +68,6 @@ type Subscription struct {
 type ClaudeFallback struct {
 	Enabled               bool   `json:"enabled"`
 	CredentialFile        string `json:"credential_file,omitempty"`
-	IdleAfter             string `json:"idle_after,omitempty"`
 	AccountFile           string `json:"account_file,omitempty"`
 	ExpectedAccountSHA256 string `json:"expected_account_sha256,omitempty"`
 }
@@ -182,8 +181,8 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		OpenCodeURL: strings.TrimRight(c.OpenCode.URL, "/"), OpenCodeBearerEnv: c.OpenCode.TokenEnv,
 		OpenCodeServiceFile: c.OpenCode.ServiceFile}
 	interval, stale := 5*time.Minute, 30*time.Minute
-	if entry.Provider != "claude" && (entry.ClaudeFallback != nil || entry.ObserveInterval != "") {
-		return s, errors.New("Claude fallback and observe_interval are only valid for claude")
+	if entry.Provider != "claude" && entry.Provider != "opencode" && (entry.ClaudeFallback != nil || entry.ObserveInterval != "") {
+		return s, errors.New("Claude fallback and observe_interval are only valid for claude and opencode")
 	}
 	switch entry.Provider {
 	case "codex":
@@ -229,11 +228,8 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 				return s, errors.New("claude_fallback.credential_file must be an absolute native Claude Code credential path")
 			}
 			s.CredentialFile = fallback.CredentialFile
+			s.ClaudeNative = true
 			var err error
-			s.ClaudeIdleAfter, err = duration(fallback.IdleAfter, 10*time.Minute, time.Minute, 24*time.Hour)
-			if err != nil {
-				return s, errors.New("claude_fallback.idle_after must be between 1m and 24h")
-			}
 			s.ObserveInterval, err = duration(entry.ObserveInterval, 30*time.Second, 15*time.Second, time.Hour)
 			if err != nil {
 				return s, errors.New("observe_interval must be between 15s and 1h")
@@ -249,6 +245,34 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		} else if entry.ObserveInterval != "" {
 			return s, errors.New("observe_interval requires enabled claude_fallback; passive-only sources use interval")
 		}
+	case "opencode":
+		// The OpenCode Console (pay-as-you-go). The credential is the Console
+		// credential of the local OpenCode service, never a file of this config.
+		s.Source, s.Product = "opencode_console", "opencode_console"
+		if s.OpenCodeServiceFile == "" {
+			if err := validateOpenCodeURL(s.OpenCodeURL); err != nil {
+				return s, err
+			}
+		}
+		if s.CredentialFile != "" {
+			return s, errors.New("opencode console must not use credential_file")
+		}
+		if s.IntegrationID == "" {
+			s.IntegrationID = collectors.OpenCodeConsoleIntegration
+		}
+		if s.IntegrationID != collectors.OpenCodeConsoleIntegration {
+			return s, errors.New("opencode console requires integration_id opencode")
+		}
+		if s.ObservedFile != "" && !filepath.IsAbs(s.ObservedFile) {
+			return s, errors.New("opencode observed_file must be an absolute path")
+		}
+		if entry.ObserveInterval != "" {
+			var err error
+			s.ObserveInterval, err = duration(entry.ObserveInterval, 30*time.Second, 15*time.Second, time.Hour)
+			if err != nil {
+				return s, errors.New("observe_interval must be between 15s and 1h")
+			}
+		}
 	default:
 		return s, errors.New("unsupported enabled provider")
 	}
@@ -257,7 +281,7 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 	}
 	var err error
 	s.Interval, err = duration(entry.Interval, interval, 15*time.Second, 24*time.Hour)
-	if err != nil || ((entry.Provider != "claude" || s.ClaudeIdleAfter > 0) && s.Interval < time.Minute) {
+	if err != nil || ((entry.Provider != "claude" || s.ClaudeNative) && s.Interval < time.Minute) {
 		return s, errors.New("interval must be 1m..24h for polling or 15s..24h for observed files")
 	}
 	s.StaleAfter, err = duration(entry.StaleAfter, stale, time.Minute, 7*24*time.Hour)

@@ -52,13 +52,16 @@ type Spec struct {
 	OpenCodeBearerEnv string
 	// OpenCodeServiceFile is an absolute path to the OpenCode local-service
 	// registration (service.json). It excludes OpenCodeURL and OpenCodeBearerEnv.
-	OpenCodeServiceFile         string
-	ObservedFile                string
-	BackoffBase                 time.Duration
-	BackoffMax                  time.Duration
-	RateLimitPause              time.Duration
-	AuthRetry                   time.Duration
-	ClaudeIdleAfter             time.Duration
+	OpenCodeServiceFile string
+	ObservedFile        string
+	BackoffBase         time.Duration
+	BackoffMax          time.Duration
+	RateLimitPause      time.Duration
+	AuthRetry           time.Duration
+	// ClaudeNative enables the native Claude Code OAuth usage request. It runs on
+	// the subscription's own interval and reports every window of the account,
+	// including the model-scoped ones the passive headers never carry.
+	ClaudeNative                bool
 	ObserveInterval             time.Duration
 	ClaudeAccountFile           string
 	ClaudeExpectedAccountSHA256 string

@@ -3,6 +3,7 @@
 !/.gitignore
 !/.dockerignore
 !/.env.example
+!/.github/
 !/README.md
 !/CONTRIBUTING.md
 !/LICENSE

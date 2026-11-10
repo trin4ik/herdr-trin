@@ -16,20 +16,22 @@ import (
 //   - a local scan (Spec.ObserveInterval, default 30s) that calls the network-free
 //     Observe and is never delayed by a rate-limit cooldown or a busy scope;
 //   - a remote clock (HybridState.NextRemoteAttemptAt) that allows one upstream
-//     Fetch only when no actual passive response was seen for Spec.ClaudeIdleAfter
-//     (default 10m), the stored/shared cooldown has passed and the scope is free.
+//     Fetch per subscription interval, as every other provider does.
+//
+// Both clocks report windows of the same subscription. The collector merges them:
+// a window only the remote source knows (a model-scoped weekly limit, for
+// example) does not disappear when a passive observation arrives, and the newer
+// value of a window both sources report wins.
 //
 // The stored next_attempt_at of a hybrid worker is the next local scan; the remote
-// deadline is exposed as next_poll_at. A passive observation only ever raises the
-// remote deadline, and a remote success never moves the passive (idle) clock.
+// deadline is exposed as next_poll_at.
 const (
-	defaultIdleAfter    = 10 * time.Minute
 	defaultObserveEvery = 30 * time.Second
 )
 
 type hybridRuntime struct {
-	hy         collectors.HybridCollector
-	idle, scan time.Duration
+	hy   collectors.HybridCollector
+	scan time.Duration
 
 	mu    sync.Mutex
 	guard time.Time // in-memory remote not-before: survives a failed persist
@@ -54,10 +56,7 @@ func newHybridRuntime(w Worker) *hybridRuntime {
 	if !ok {
 		return nil
 	}
-	h := &hybridRuntime{hy: hy, idle: w.Spec.ClaudeIdleAfter, scan: w.Spec.ObserveInterval}
-	if h.idle <= 0 {
-		h.idle = defaultIdleAfter
-	}
+	h := &hybridRuntime{hy: hy, scan: w.Spec.ObserveInterval}
 	if h.scan <= 0 {
 		h.scan = defaultObserveEvery
 	}
@@ -79,25 +78,12 @@ func restoreHybridScope(g *scopeGuard, hs model.HybridState) {
 	}
 }
 
-// raiseForPassive keeps the remote deadline at or after lastPassive+idle. It never
-// lowers an existing deadline, so a 429 pause or backoff survives new headers.
-func (w *worker) raiseForPassive(hs *model.HybridState, now time.Time) {
-	if hs.LastPassiveAt == nil {
-		return
-	}
-	t := hs.LastPassiveAt.Add(w.hyb.idle)
-	if !t.After(now) {
-		return
-	}
-	if hs.NextRemoteAttemptAt == nil || t.After(*hs.NextRemoteAttemptAt) {
-		hs.NextRemoteAttemptAt = &t
-	}
-}
+// raiseForPassive keeps the remote deadline untouched: a passive observation is
+// local data and never postpones the remote request. The remote clock follows
+// the subscription interval like every other provider.
+func (w *worker) raiseForPassive(hs *model.HybridState, now time.Time) {}
 
 func (w *worker) remoteAllowed(hs model.HybridState, now time.Time) bool {
-	if hs.LastPassiveAt != nil && now.Sub(*hs.LastPassiveAt) < w.hyb.idle {
-		return false
-	}
 	if hs.NextRemoteAttemptAt != nil && hs.NextRemoteAttemptAt.After(now) {
 		return false
 	}

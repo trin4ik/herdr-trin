@@ -72,7 +72,7 @@ func New(spec Spec, opts Options) (Collector, error) {
 		if spec.ObservedFile == "" {
 			return nil, fail(CodeConfigInvalid)
 		}
-		if spec.ClaudeIdleAfter != 0 {
+		if spec.ClaudeNative {
 			ep, err := endpoint("claude", EndpointClaudeUsage)
 			if err != nil {
 				return nil, err
@@ -84,6 +84,22 @@ func New(spec Spec, opts Options) (Collector, error) {
 			return h, nil
 		}
 		return &claudeCollector{base: b}, nil
+	case spec.Provider == ProviderOpenCode && spec.Source == SourceOpenCodeConsole:
+		// The Console credential comes from the local OpenCode service, exactly
+		// like the Ollama and Kimi keys. The Console origin is a constant.
+		oc, err := newOpenCodeKey(spec, opts)
+		if err != nil {
+			return nil, err
+		}
+		server, err := endpoint("console", EndpointConsole)
+		if err != nil {
+			return nil, err
+		}
+		goUsage, err := endpoint("console_go", EndpointConsoleGo)
+		if err != nil {
+			return nil, err
+		}
+		return &openCodeConsoleCollector{base: b, oc: oc, server: server, goUsage: goUsage}, nil
 	}
 	return nil, fail(CodeConfigInvalid)
 }

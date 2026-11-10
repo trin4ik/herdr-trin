@@ -110,7 +110,9 @@ func (c *claudeCollector) Fetch(ctx context.Context) (model.Result, error) {
 			continue
 		}
 		win.ResetAt = w.reset
-		quotas = append(quotas, percentQuota(id, scope, *w.util*100, win))
+		q := percentQuota(id, scope, *w.util*100, win)
+		q.ObservedAt = tptr(at)
+		quotas = append(quotas, q)
 	}
 	if len(quotas) == 0 {
 		return model.Result{}, fail(CodeInvalidResponse)

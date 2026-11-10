@@ -17,11 +17,11 @@
       "interval": "5m", "observe_interval": "30s", "stale_after": "30m",
       "claude_fallback": {
         "enabled": true,
-        "credential_file": "/credentials/claude/.credentials.json",
-        "idle_after": "10m"
+        "credential_file": "/credentials/claude/.credentials.json"
       }
     },
     { "id": "ollama-primary", "provider": "ollama", "enabled": false, "integration_id": "ollama-cloud" },
-    { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" }
+    { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" },
+    { "id": "opencode-console", "provider": "opencode", "enabled": false, "integration_id": "opencode" }
   ]
 }

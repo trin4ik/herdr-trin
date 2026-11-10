@@ -62,7 +62,7 @@ func hdefs(ids ...string) []model.Definition {
 func hspec(id, scope string) collectors.Spec {
 	sp := spec(id, scope, 5*time.Minute)
 	sp.Definition.Source = collectors.SourceOpenCodeObserved
-	sp.ClaudeIdleAfter = 10 * time.Minute
+	sp.ClaudeNative = true
 	sp.ObserveInterval = 30 * time.Second
 	sp.AuthRetry = 30 * time.Minute
 	return sp
@@ -109,23 +109,64 @@ func journal(t *testing.T, dir, kind string) int {
 	return strings.Count(string(b), "\n")
 }
 
-func TestHybridBusyBridgeNeverCallsAPI(t *testing.T) {
+// The remote request follows the subscription interval, exactly like every other
+// provider: the native usage endpoint knows windows the passive headers never
+// carry, so waiting for an idle gap would hide them.
+func TestHybridRemoteRunsOnIntervalWhileBridgeIsActive(t *testing.T) {
 	c := &clock{t: t0}
 	h := &hfake{fetchFn: apiOK(c)}
 	h.obsFn = func(context.Context, int) (model.Result, error) { return passive(c.Now().Add(-5 * time.Second)), nil }
 	e, s := hsetup(t, t.TempDir(), c, h)
-	for i := 0; i < 50; i++ { // 25 minutes of continuous traffic
+	for i := 0; i < 40; i++ { // 20 minutes of continuous traffic
 		step(t, e, c, 30*time.Second)
 	}
-	if h.fetches.Load() != 0 {
-		t.Fatalf("remote GET while bridge is active: %d", h.fetches.Load())
+	if got := h.fetches.Load(); got != 4 { // 0:30, 5:30, 10:30, 15:30
+		t.Fatalf("remote GETs on the subscription interval: %d", got)
 	}
 	sub, _ := s.GetAt("claude", c.Now())
-	if sub.LastPassiveAt == nil || sub.Source != "opencode_observed" || sub.Stale {
+	if sub.LastPassiveAt == nil || sub.Stale {
 		t.Fatalf("%+v", sub)
 	}
-	if sub.NextPollAt == nil || sub.NextPollAt.Before(sub.LastPassiveAt.Add(10*time.Minute)) {
-		t.Fatalf("next poll %v passive %v", sub.NextPollAt, sub.LastPassiveAt)
+	if sub.NextPollAt == nil || !sub.NextPollAt.After(c.Now()) || sub.NextPollAt.After(c.Now().Add(5*time.Minute)) {
+		t.Fatalf("next poll %v", sub.NextPollAt)
+	}
+}
+
+// A passive observation never postpones the remote request, and the remote
+// success never makes the passive clock look active.
+func TestHybridRemoteKeepsItsOwnClock(t *testing.T) {
+	c := &clock{t: t0}
+	var live atomic.Bool
+	h := &hfake{fetchFn: apiOK(c)}
+	h.obsFn = func(context.Context, int) (model.Result, error) {
+		if live.Load() {
+			return passive(c.Now()), nil
+		}
+		return model.Result{}, errNoBridge
+	}
+	e, s := hsetup(t, t.TempDir(), c, h)
+	e.Poll(context.Background(), "claude") // fetch #1 at t0
+	step(t, e, c, 5*time.Minute)           // fetch #2 at 5m
+	if h.fetches.Load() != 2 {
+		t.Fatal(h.fetches.Load())
+	}
+	c.Add(2 * time.Minute) // 7m: headers resume
+	live.Store(true)
+	e.Poll(context.Background(), "claude")
+	sub, _ := s.GetAt("claude", c.Now())
+	if sub.NextPollAt == nil || !sub.NextPollAt.Equal(t0.Add(10*time.Minute)) {
+		t.Fatalf("next poll %v", sub.NextPollAt)
+	}
+	live.Store(false)
+	for c.Now().Before(t0.Add(9*time.Minute + 30*time.Second)) {
+		step(t, e, c, 30*time.Second)
+	}
+	if h.fetches.Load() != 2 {
+		t.Fatalf("extra GET before the interval: %d", h.fetches.Load())
+	}
+	step(t, e, c, 30*time.Second)
+	if h.fetches.Load() != 3 {
+		t.Fatalf("no fetch on the interval: %d", h.fetches.Load())
 	}
 }
 
@@ -158,7 +199,7 @@ func TestHybridIdleFetchesImmediatelyThenEveryFiveMinutesAndAPIDoesNotMakeBridge
 	}
 }
 
-func TestHybridResumingHeadersSuppressFetch(t *testing.T) {
+func TestHybridResumingHeadersDoNotSuppressFetch(t *testing.T) {
 	c := &clock{t: t0}
 	var live atomic.Bool
 	h := &hfake{fetchFn: apiOK(c)}
@@ -178,19 +219,19 @@ func TestHybridResumingHeadersSuppressFetch(t *testing.T) {
 	live.Store(true)
 	e.Poll(context.Background(), "claude")
 	sub, _ := s.GetAt("claude", c.Now())
-	if sub.NextPollAt == nil || !sub.NextPollAt.Equal(t0.Add(17*time.Minute)) {
+	if sub.NextPollAt == nil || !sub.NextPollAt.Equal(t0.Add(10*time.Minute)) {
 		t.Fatalf("next poll %v", sub.NextPollAt)
 	}
 	live.Store(false)
-	for c.Now().Before(t0.Add(16*time.Minute + 30*time.Second)) {
+	for c.Now().Before(t0.Add(9*time.Minute + 30*time.Second)) {
 		step(t, e, c, 30*time.Second)
 	}
 	if h.fetches.Load() != 2 {
-		t.Fatalf("extra GET during the recent-bridge window: %d", h.fetches.Load())
+		t.Fatalf("extra GET before the interval: %d", h.fetches.Load())
 	}
 	step(t, e, c, 30*time.Second)
 	if h.fetches.Load() != 3 {
-		t.Fatalf("no fallback once idle again: %d", h.fetches.Load())
+		t.Fatalf("no fetch on the interval: %d", h.fetches.Load())
 	}
 }
 
@@ -394,13 +435,13 @@ func TestHybridOldBridgeAfterAPISuccessDoesNotBackdateFreshness(t *testing.T) {
 	if !sub.LastSuccessAt.Equal(t0) {
 		t.Fatalf("backdated: %v", sub.LastSuccessAt)
 	}
-	if sub.NextPollAt == nil || !sub.NextPollAt.Equal(r2.Add(10*time.Minute)) {
-		t.Fatalf("activity clock must advance: next poll %v", sub.NextPollAt)
+	if sub.NextPollAt == nil || !sub.NextPollAt.Equal(t0.Add(5*time.Minute)) {
+		t.Fatalf("remote schedule must not move: next poll %v", sub.NextPollAt)
 	}
 	c.Add(5 * time.Minute)
 	e.Poll(context.Background(), "claude")
-	if h.fetches.Load() != 1 {
-		t.Fatalf("recent bridge did not suppress GET: %d", h.fetches.Load())
+	if h.fetches.Load() != 2 {
+		t.Fatalf("remote GET must follow the interval: %d", h.fetches.Load())
 	}
 }
 
@@ -413,11 +454,13 @@ func TestHybridUnchangedObservationLogsNothingNew(t *testing.T) {
 	e, s := hsetup(t, dir, c, h)
 	e.Poll(context.Background(), "claude")
 	before, _ := s.GetAt("claude", c.Now())
-	for i := 0; i < 10; i++ {
+	attempts := journal(t, dir, "attempts")
+	history := journal(t, dir, "history")
+	for i := 0; i < 4; i++ {
 		step(t, e, c, 30*time.Second)
 	}
 	after, _ := s.GetAt("claude", c.Now())
-	if journal(t, dir, "attempts") != 1 || journal(t, dir, "history") != 1 {
+	if journal(t, dir, "attempts") != attempts || journal(t, dir, "history") != history {
 		t.Fatalf("duplicates: attempts %d history %d", journal(t, dir, "attempts"), journal(t, dir, "history"))
 	}
 	// metadata-only scans never freshen attempt/success
@@ -578,11 +621,11 @@ func TestHybridObserveErrorAloneNeverOverwritesGood(t *testing.T) {
 	e, s := hsetup(t, dir, c, h)
 	e.Poll(context.Background(), "claude")
 	bad.Store(true)
-	for i := 0; i < 5; i++ { // < idle: no remote either
+	for i := 0; i < 5; i++ { // the remote keeps its own interval
 		step(t, e, c, 30*time.Second)
 	}
 	sub, _ := s.GetAt("claude", c.Now())
-	if sub.Error != nil || sub.Stale || journal(t, dir, "attempts") != 1 || h.fetches.Load() != 0 {
+	if sub.Error != nil || sub.Stale || journal(t, dir, "attempts") != 2 || h.fetches.Load() != 1 {
 		t.Fatalf("phantom error or early GET: %+v", sub)
 	}
 }

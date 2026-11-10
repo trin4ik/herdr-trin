@@ -1,7 +1,7 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, Popover } from "gpui-base";
 import { theme, layout, nextCommand, shared, setShared } from "herdr";
-import { usage, compactPercent, primaryWindow, quotaColor, hasWarning } from "./metrics.js";
+import { usage, compactPercent, primaryWindow, quotaColor, hasWarning, balanceText } from "./metrics.js";
 import { QuotaMonitor, REFRESH_MS } from "./monitor.js";
 import { requestQuotas, quotaURL } from "./transport.js";
 import { quotaDetails } from "./details.js";
@@ -87,7 +87,7 @@ export default class Quotas extends View {
 
   mark(subscription, t, size = 16) {
     const provider = subscription.provider;
-    if (["openai", "anthropic", "ollama", "kimi"].includes(provider)) {
+    if (["openai", "anthropic", "ollama", "kimi", "opencode"].includes(provider)) {
       // Existing real asset copies also used by Agents (external mod symlinks
       // cannot be used as SVG assets through the native asset sandbox).
       return h_flex().size(size).flex_none().items_center().justify_center()
@@ -112,20 +112,22 @@ export default class Quotas extends View {
 
   row(subscription, t, narrow) {
     const value = usage(primaryWindow(subscription));
+    // A pay-as-you-go subscription has no percentage: it shows its balance.
+    const text = value != null ? compactPercent(value) : balanceText(subscription.balances?.[0]);
     if (narrow) {
       return v_flex().id(`quota-${subscription.id}`).h(34).flex_none().items_center().justify_center().gap(2)
         .child(this.providerIcon(subscription, t, 22))
         .child(div().id(`quota-${subscription.id}-usage`).h(10).line_height("10px").flex_none()
           .text_size(9.5).font_medium().font_family("JetBrains Mono")
           .text_color(value != null && value >= 60 ? quotaColor(t, value) : t.foreground)
-          .child(compactPercent(value)));
+          .child(text));
     }
 
     return h_flex().id(`quota-${subscription.id}`).h(28).flex_none().px(16).min_w(0).items_center()
       .child(this.providerIcon(subscription, t).mr(12))
       .child(this.meter(t, value).mr(12))
       .child(div().id(`quota-${subscription.id}-usage`).flex_none().text_right().font_family("JetBrains Mono").text_size(11)
-        .text_color(value != null && value >= 60 ? quotaColor(t, value) : t.foreground).child(compactPercent(value)));
+        .text_color(value != null && value >= 60 ? quotaColor(t, value) : t.foreground).child(text));
   }
 
   render() {

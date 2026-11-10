@@ -37,14 +37,16 @@ const (
 )
 
 const (
-	ProviderCodex  = "codex"
-	ProviderOllama = "ollama"
-	ProviderKimi   = "kimi"
-	ProviderClaude = "claude"
+	ProviderCodex    = "codex"
+	ProviderOllama   = "ollama"
+	ProviderKimi     = "kimi"
+	ProviderClaude   = "claude"
+	ProviderOpenCode = "opencode"
 
 	SourceNativeCodexOAuth = "native_codex_oauth"
 	SourceOpenCodeKey      = "opencode_key"
 	SourceOpenCodeObserved = "opencode_observed"
+	SourceOpenCodeConsole  = "opencode_console"
 
 	EndpointCodex    = "https://chatgpt.com/backend-api/wham/usage"
 	EndpointOllama   = "https://ollama.com/api/balance"
@@ -54,6 +56,14 @@ const (
 	EndpointOllamaProfile   = "https://ollama.com/api/me"
 	EndpointKimiCNProfile   = "https://api.kimi.com/coding/v1/me"
 	EndpointKimiGlobProfile = "https://api.kimi.ai/coding/v1/me"
+
+	// The OpenCode Console is the pay-as-you-go gateway of opencode.ai. The
+	// console origin is a constant: it is never taken from a credential or a
+	// response, so a credential can never redirect the quota requests.
+	EndpointConsole   = "https://opencode.ai/console"
+	EndpointConsoleGo = "https://opencode.ai/zen/go/v1/usage"
+
+	OpenCodeConsoleIntegration = "opencode"
 
 	KimiGlobalIntegration = "kimi-code-plan-global"
 
@@ -405,6 +415,22 @@ func percentQuota(id string, scope *string, usedPct float64, w model.Window) mod
 
 func unknownWindow() model.Window { return model.Window{Kind: "unknown"} }
 
+// counterQuota builds an absolute-value quota (requests, tokens, money) instead of a
+// percent window. Counters carry no limit: the provider does not publish one.
+func counterQuota(id string, scope *string, label *string, used float64, unit string, counters map[string]float64, w model.Window) model.Quota {
+	return model.Quota{
+		ID:        id,
+		Scope:     scope,
+		Metric:    "counter",
+		Unit:      unit,
+		Used:      fptr(round6(used)),
+		Window:    w,
+		Authority: authority,
+		Label:     label,
+		Counters:  counters,
+	}
+}
+
 func slug(s string) string {
 	var out []byte
 	prevUnderscore := true
@@ -428,6 +454,11 @@ func finish(observed time.Time, plan *string, quotas []model.Quota, metrics []mo
 	for _, q := range quotas {
 		for _, p := range []*float64{q.Used, q.Limit, q.Remaining, q.UsedPercent, q.RemainingPercent} {
 			if p != nil && (math.IsNaN(*p) || math.IsInf(*p, 0)) {
+				return model.Result{}, failStatus(CodeInvalidResponse, http.StatusOK)
+			}
+		}
+		for _, v := range q.Counters {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
 				return model.Result{}, failStatus(CodeInvalidResponse, http.StatusOK)
 			}
 		}

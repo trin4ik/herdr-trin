@@ -1,13 +1,17 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel } from "./metrics.js";
+import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel, isCounter, counterRows, windowTitle, unlimited, scopeLabel } from "./metrics.js";
 
 // The height budget uses the same fixed line heights/padding as the builders.
 // Scroll owns overflow; individual windows and 4px tracks must never shrink.
 const HEADER = 64, FOOTER = 77, MAX_HEIGHT = 600;
 const expired = (window, now) => Boolean(window.resetsAt && Date.parse(window.resetsAt) <= Date.parse(now));
 const separator = (subscription, index) => index < subscription.windows.length - 1 || Boolean(subscription.balances?.length);
-const windowHeight = (window, now, divided) => 136 + (expired(window, now) ? 20 : 0) + (divided ? 1 : 0);
+const windowHeight = (window, now, divided) => {
+  // A counter window is a short list of absolute values, not a bar.
+  if (isCounter(window)) return 46 + counterRows(window).length * 16 + (divided ? 1 : 0);
+  return 136 + (expired(window, now) ? 20 : 0) + (divided ? 1 : 0);
+};
 const warningMessage = (subscription, monitor, now) => monitor.error?.message || subscription.error?.message
   || (hasWarning(subscription, now) ? "Данные могут быть устаревшими" : null);
 
@@ -72,18 +76,29 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
           .child("Сервис пока не сообщил лимиты этой подписки.")))
         .children(subscription.windows.map((window, index) => {
           const value = usage(window), divided = separator(subscription, index);
+          const title = windowTitle(window);
+          if (isCounter(window)) {
+            const rows = counterRows(window);
+            return v_flex().id(`quota-window-${subscription.id}-${window.id}`).h(windowHeight(window, now, divided)).flex_none().py(12).gap(6)
+              .when(divided, el => el.border_b(1).border_color(t.border))
+              .child(h_flex().h(16).flex_none().gap(8).items_center().line_height("16px")
+                .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).tooltip(title).child(title))
+                .when(scopeLabel(window.scope), el => el.child(div().text_size(9).text_color(t.dim).child(scopeLabel(window.scope)))))
+              .child(v_flex().flex_none().gap(4)
+                .children(rows.map(([label, text]) => item(label, text))));
+          }
           return v_flex().id(`quota-window-${subscription.id}-${window.id}`).h(windowHeight(window, now, divided)).flex_none().py(12).gap(6)
             .when(divided, el => el.border_b(1).border_color(t.border))
             .child(h_flex().h(16).flex_none().gap(8).items_center().line_height("16px")
-              .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).tooltip(window.label).child(window.label))
+              .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).tooltip(title).child(title))
               .when(window === primary, el => el.child(div().text_size(9).text_color(t.dim).child("В строке"))))
             .child(h_flex().h(16).flex_none().items_center().justify_between().text_size(11).line_height("16px")
-              .child(div().text_color(t.muted).child("Израсходовано"))
+              .child(div().text_color(t.muted).child(unlimited(window) ? "Без лимита" : "Израсходовано"))
               .child(div().font_family("JetBrains Mono").font_medium().text_color(value == null ? t.dim : quotaColor(t, value)).child(percent(value))))
             .child(div().id(`quota-track-${subscription.id}-${window.id}`).h(4).flex_none().w_full().rounded(2).bg(t.hover).overflow_hidden()
-              .when(value != null && value > 0, el => el.child(div().h(4).flex_none().w(`${value}%`).rounded(2).bg(quotaColor(t, value)).opacity(0.75))))
+              .when(value != null && value > 0 && !unlimited(window), el => el.child(div().h(4).flex_none().w(`${value}%`).rounded(2).bg(quotaColor(t, value)).opacity(0.75))))
             .child(h_flex().h(16).flex_none().justify_between().text_size(10.5).line_height("16px")
-              .child(div().text_color(t.muted).child(`Осталось ${percent(remaining(window))}`))
+              .child(div().text_color(t.muted).child(unlimited(window) ? "Ограничение не действует" : `Осталось ${percent(remaining(window))}`))
               .child(div().text_color(t.dim).child(resetLabel(window.resetsAt, now))))
             .child(v_flex().h(36).flex_none().gap(4)
               .child(item("Начало", dateLabel(window.startedAt)))

@@ -82,7 +82,7 @@ func hybridSpec(creds, observed string) Spec {
 		Definition:      model.Definition{ID: "claude", Provider: ProviderClaude, Source: SourceOpenCodeObserved},
 		ObservedFile:    observed,
 		CredentialFile:  creds,
-		ClaudeIdleAfter: 30 * time.Minute,
+		ClaudeNative:    true,
 		ObserveInterval: time.Minute,
 	}
 }
@@ -459,7 +459,7 @@ func TestClaudeLegacyPassiveIsNotHybrid(t *testing.T) {
 	file := writeObs(t, fixture(t, "claude_observation.json"))
 	for _, s := range []Spec{
 		claudeSpec(file),
-		// credentials/pin fields without IdleAfter keep the plain passive collector.
+		// credentials/pin fields without the native flag keep the plain passive collector.
 		func() Spec {
 			s := claudeSpec(file)
 			s.CredentialFile = "/unused"
@@ -487,11 +487,6 @@ func TestClaudeHybridConstructorValidation(t *testing.T) {
 	bad := map[string]Spec{
 		"no credential file": hybridSpec("", obs),
 		"no observed file":   hybridSpec(creds, ""),
-		"negative idle": func() Spec {
-			s := hybridSpec(creds, obs)
-			s.ClaudeIdleAfter = -time.Second
-			return s
-		}(),
 	}
 	for name, s := range bad {
 		if _, err := New(s, opts(nil)); err == nil || errInfo(t, err).Code != CodeConfigInvalid {

@@ -7,9 +7,10 @@ Headless Go-сборщик → private last-good/history/cooldown → норма
 | Провайдер | Реальный источник | Ограничение |
 | --- | --- | --- |
 | Codex | Native `.codex/auth.json`, access token/account → usage GET | Не любой OpenCode token-sharing вход; expiry обновляет native CLI |
-| Claude | Headers passive bridge; native `.claude/.credentials.json` после 10м idle | Keychain не читается; без bridge native GET возможен сразу при отсутствии observation |
+| Claude | Passive headers + native usage GET; native `.claude/.credentials.json` | Keychain не читается; нативный GET даёт все окна, включая лимит по модели |
 | Ollama | Active key `ollama-cloud` из OpenCode `/api/credential` | Нужен доступ к owning service |
 | Kimi | Active key явно выбранной `kimi-code-plan-cn` или `kimi-code-plan-global` | Не угадывать регион по имени аккаунта |
+| OpenCode Console | Credential `opencode` из OpenCode `/api/credential` → Console API opencode.ai | Сессия Console не обновляется здесь; нужен повторный вход на машине |
 
 Не PIN/device-code login: сервис использует уже существующий вход и не выполняет
 auth switch/refresh. Нет отдельной поддержки произвольного API-key env для
@@ -74,11 +75,31 @@ Claude account metadata/email требует отдельного account_file (
 файл с project history и не включает account pin. Не путайте unknown profile с
 ошибкой квоты. Подключение профиля — явное локальное решение, не auto-discovery.
 
+## OpenCode Console (pay-as-you-go)
+
+Подписка `provider: opencode` читает рабочее пространство Console: баланс,
+счётчики по моделям, бюджеты и метры Go (5ч/неделя/месяц). Кред — активная
+интеграция `opencode` локального сервиса OpenCode: session token или
+персональный API-ключ Console. Origin Console зашит в код и никогда не берётся
+из credential, поэтому кред не может перенаправить запрос квот.
+
+На машине сбора OpenCode должен быть залогинен в Console: `opencode auth login`
+или перенос существующего входа `opencode auth export | opencode auth import`.
+Сессия Console не обновляется сборщиком (refresh запрещён): при 401 подписка
+сообщает `auth_required` и её нужно переоткрыть входом на этой машине.
+
+Публичного остатка бесплатных моделей Console не отдаёт ни один endpoint.
+Единственный факт об исчерпании дневного лимита — отказ 429 с `Retry-After`;
+его наблюдает bridge-плагин (второй файл, `provider_id: opencode`, запись
+`free_limit_reset`) и backend показывает окно «Бесплатные модели» со сбросом.
+
 ## Поведение и доступ
 
-Provider polling по умолчанию 5м с jitter; Claude проверяет passive file 30с и
-после 10м без свежих headers использует native OAuth каждые 5м. Если событий нет,
-это документированное исключение: provider APIs не имеют подтверждённой подписки.
+Provider polling по умолчанию 5м с jitter. Claude читает passive file каждые 30с и
+опрашивает native OAuth usage тем же интервалом подписки: только native-ответ
+знает все окна аккаунта, включая недельный лимит по модели, которого нет в
+заголовках. Окна обоих источников объединяются по id. Если событий нет, это
+документированное исключение: provider APIs не имеют подтверждённой подписки.
 Retry-After и persisted backoff имеют приоритет; 401/403 не запускают refresh.
 GET `/v1/quotas` не опрашивает upstream. Ошибка сохраняет last-good с stale.
 

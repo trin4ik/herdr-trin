@@ -5,6 +5,7 @@ import { after, test } from "node:test"
 import {
   buildBridgeObservation,
   createBridge,
+  DEFAULT_FREE_LIMIT_FILE,
   DEFAULT_OUTPUT_FILE,
   PLUGIN_ID,
   REGISTRY_KEY,
@@ -449,10 +450,14 @@ test("hostile Headers implementations cannot break the handler", async () => {
 
 test("config: default path, valid path, and invalid paths disable the bridge", () => {
   assert.equal(resolveConfig(undefined).outputFile, DEFAULT_OUTPUT_FILE)
+  assert.equal(resolveConfig(undefined).freeLimitFile, DEFAULT_FREE_LIMIT_FILE)
   assert.equal(resolveConfig({}).outputFile, DEFAULT_OUTPUT_FILE)
   assert.equal(resolveConfig({ outputFile: "/tmp/opencode/x/claude.json" }).outputFile, "/tmp/opencode/x/claude.json")
+  assert.equal(resolveConfig({ freeLimitFile: "/tmp/opencode/x/opencode.json" }).freeLimitFile, "/tmp/opencode/x/opencode.json")
   for (const bad of ["relative/claude.json", "/tmp/../etc/x.json", "/tmp/dir/", "/", "", 5, "/tmp/a\0b", "/tmp//x.json"]) {
-    assert.deepEqual(resolveConfig({ outputFile: bad }), { outputFile: null, error: "invalid outputFile" }, String(bad))
+    // One unusable path disables the whole plugin: it never writes somewhere else.
+    assert.deepEqual(resolveConfig({ outputFile: bad }), { outputFile: null, freeLimitFile: null, error: "invalid output file" }, String(bad))
+    assert.deepEqual(resolveConfig({ freeLimitFile: bad }), { outputFile: null, freeLimitFile: null, error: "invalid output file" }, String(bad))
   }
 })
 
@@ -472,17 +477,21 @@ function fakeCtx(options, { fail = false } = {}) {
   return { ctx, hooks }
 }
 
-test("setup registers one anthropic http.response hook and does no startup I/O", async () => {
+test("setup registers the anthropic and opencode http.response hooks and does no startup I/O", async () => {
   const file = await freshFile()
-  const { ctx, hooks } = fakeCtx({ outputFile: file })
+  const freeFile = await freshFile("opencode.latest.json")
+  const { ctx, hooks } = fakeCtx({ outputFile: file, freeLimitFile: freeFile })
   const cleanup = await setupBridge(ctx, { registry: new Map() })
   assert.equal(PLUGIN_ID, "quota-hub.claude-bridge")
-  assert.equal(hooks.length, 1)
+  assert.equal(hooks.length, 2)
   assert.equal(hooks[0].name, "http.response")
   assert.deepEqual(hooks[0].opts, { providerID: "anthropic" })
+  assert.equal(hooks[1].name, "http.response")
+  assert.deepEqual(hooks[1].opts, { providerID: "opencode" })
   assert.deepEqual(await readdir(dirname(dirname(dirname(file)))), [])
   await cleanup()
   assert.equal(hooks[0].disposed, 1)
+  assert.equal(hooks[1].disposed, 1)
   assert.deepEqual(await readdir(dirname(dirname(dirname(file)))), [])
 })
 
@@ -537,7 +546,7 @@ test("server.ts is a thin Plugin.define wrapper and the sources use no forbidden
 })
 
 test("runtime imports stay inside the plugin for OpenCode symlink loading", async () => {
-  for (const filename of ["server.ts", "bridge.mjs", "headers.mjs"]) {
+  for (const filename of ["server.ts", "bridge.mjs", "headers.mjs", "free-limit.mjs"]) {
     const source = await readFile(new URL(`../${filename}`, import.meta.url), "utf8")
     for (const match of source.matchAll(/from\s+["']([^"']+)["']/g)) {
       const specifier = match[1]

@@ -271,20 +271,19 @@ func TestWildcardListenerRequiresExplicitContainerOptIn(t *testing.T) {
 
 func TestClaudeHybridUsesNativeCredentialsAndSeparateIntervals(t *testing.T) {
 	c := valid(t)
-	c.Subscriptions[3].ClaudeFallback = &ClaudeFallback{Enabled: true, CredentialFile: "/not-opened/.credentials.json", IdleAfter: "10m",
+	c.Subscriptions[3].ClaudeFallback = &ClaudeFallback{Enabled: true, CredentialFile: "/not-opened/.credentials.json",
 		AccountFile: "/not-opened/.claude.json", ExpectedAccountSHA256: strings.Repeat("a", 64)}
 	specs, err := c.Specs()
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := specs[3]
-	if s.Interval != 5*time.Minute || s.ObserveInterval != 30*time.Second || s.ClaudeIdleAfter != 10*time.Minute ||
+	if s.Interval != 5*time.Minute || s.ObserveInterval != 30*time.Second || !s.ClaudeNative ||
 		s.CredentialFile != "/not-opened/.credentials.json" || s.ClaudeExpectedAccountSHA256 != strings.Repeat("a", 64) {
 		t.Fatal("hybrid did not keep passive activity distinct from native polling")
 	}
 	for _, mutate := range []func(*Config){
 		func(c *Config) { c.Subscriptions[3].ClaudeFallback.CredentialFile = "relative.json" },
-		func(c *Config) { c.Subscriptions[3].ClaudeFallback.IdleAfter = "0s" },
 		func(c *Config) { c.Subscriptions[3].ClaudeFallback.ExpectedAccountSHA256 = "not-a-hash" },
 		func(c *Config) { c.Subscriptions[3].ObserveInterval = "1s" },
 		func(c *Config) { c.Subscriptions[3].Interval = "30s" },

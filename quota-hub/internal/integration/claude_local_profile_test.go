@@ -45,7 +45,7 @@ func TestClaudeLocalProfileDoesNotWaitForIdleOrChangeQuotaClocks(t *testing.T) {
 	defer upstream.Close()
 	pin := sha256.Sum256([]byte("pinned-account"))
 	def := model.Definition{ID: "claude", Provider: "claude", Source: "opencode_observed", PublishAccountEmail: true, StaleAfter: time.Hour}
-	spec := collectors.Spec{Definition: def, CredentialFile: creds, ClaudeAccountFile: account, ClaudeExpectedAccountSHA256: hex.EncodeToString(pin[:]), ObservedFile: observed, Interval: 5 * time.Minute, ObserveInterval: 30 * time.Second, ClaudeIdleAfter: 10 * time.Minute, Timeout: time.Second}
+	spec := collectors.Spec{Definition: def, CredentialFile: creds, ClaudeAccountFile: account, ClaudeExpectedAccountSHA256: hex.EncodeToString(pin[:]), ObservedFile: observed, Interval: 5 * time.Minute, ObserveInterval: 30 * time.Second, ClaudeNative: true, Timeout: time.Second}
 	c, err := collectors.New(spec, collectors.Options{Now: clock, Endpoints: map[string]string{"claude": upstream.URL}})
 	if err != nil {
 		t.Fatal(err)

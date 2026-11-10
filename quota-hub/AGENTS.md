@@ -4,9 +4,11 @@
 и без LLM-генераций: этот сервис читает usage, не вызывает модели.
 
 - Источники: native Codex OAuth; Claude passive headers + native OAuth fallback;
-  Ollama/Kimi — allowlisted активные ключи OpenCode credential API.
+  Ollama/Kimi — allowlisted активные ключи OpenCode credential API;
+  OpenCode Console — активная интеграция `opencode` того же credential API.
 - Никогда не обновлять/ротировать credentials, не вызывать auth resolver или
   refresh endpoint. Не копировать БД, service.json, auth.json, сырые ответы в Git.
+  Сессия OpenCode Console не обновляется: истёкший вход = `auth_required`.
 - OAuth/native metadata остаются на машине владельца. HTTP выдаёт нормализованный
   schema v1 (`../docs/quota-api.md`), email только при publish_account_email=true.
 - Политика по умолчанию в коде — Bearer, wildcard listener запрещён. Compose
