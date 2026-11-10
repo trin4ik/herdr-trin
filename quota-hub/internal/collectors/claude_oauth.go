@@ -328,7 +328,7 @@ func parseClaudeLimits(top map[string]json.RawMessage, observed time.Time) ([]mo
 		if used < 0 || used > 100 {
 			continue
 		}
-		id, scope, label, w := claudeLimitWindow(entry)
+		id, scope, w := claudeLimitWindow(entry)
 		if id == "" || seen[id] {
 			continue
 		}
@@ -339,37 +339,37 @@ func parseClaudeLimits(top map[string]json.RawMessage, observed time.Time) ([]mo
 			}
 		}
 		q := percentQuota(id, scope, used, w)
-		q.Label = &label
+		// No provider label here: the derived window label already names the
+		// length of the window and the scope of a pool.
 		q.ObservedAt = tptr(observed)
 		quotas = append(quotas, q)
 	}
 	return quotas, len(quotas) > 0
 }
 
-// claudeLimitWindow maps one limits[] entry to an id, a scope, a label and a
-// window. The ids match the passive header ids (five_hour, seven_day), so both
-// sources describe the same window and can be merged.
-func claudeLimitWindow(entry claudeLimitEntry) (string, *string, string, model.Window) {
+// claudeLimitWindow maps one limits[] entry to an id, a scope and a window. The
+// ids match the passive header ids (five_hour, seven_day), so both sources
+// describe the same window and can be merged.
+func claudeLimitWindow(entry claudeLimitEntry) (string, *string, model.Window) {
 	w := unknownWindow()
 	kind := strings.ToLower(strings.TrimSpace(entry.Kind))
 	group := strings.ToLower(strings.TrimSpace(entry.Group))
 	switch kind {
 	case "session":
 		w.DurationSeconds = i64ptr(18000)
-		return "five_hour", nil, "Сессия", w
+		return "five_hour", nil, w
 	case "weekly_all":
 		w.Period = sptr("week")
 		w.DurationSeconds = i64ptr(604800)
-		return "seven_day", nil, "Неделя", w
+		return "seven_day", nil, w
 	case "weekly_scoped":
 		w.Period = sptr("week")
 		w.DurationSeconds = i64ptr(604800)
 		name, id := claudeScopedModel(entry)
 		if name == "" {
-			return "", nil, "", w
+			return "", nil, w
 		}
-		label := "Неделя"
-		return "seven_day_" + slug(id), sptr(name), label, w
+		return "seven_day_" + slug(id), sptr(name), w
 	}
 	// An unknown kind keeps its own window: the group still describes its length.
 	switch group {
@@ -386,16 +386,12 @@ func claudeLimitWindow(entry claudeLimitEntry) (string, *string, string, model.W
 	}
 	id := slug(kind)
 	if id == "" {
-		return "", nil, "", w
+		return "", nil, w
 	}
 	if group != "" && group != kind {
 		id += "_" + slug(group)
 	}
-	label := kind
-	if label == "" {
-		label = "Лимит"
-	}
-	return id, nil, label, w
+	return id, nil, w
 }
 
 // claudeScopedModel returns the display name and the slug of the model a scoped
