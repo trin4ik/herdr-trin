@@ -1,7 +1,7 @@
 # Passive quota bridge
 
 OpenCode V2 `http.response` plugin: сохраняет только allowlisted quota headers
-Anthropic и отказ бесплатных моделей OpenCode Console, без request/response body,
+Anthropic и общий факт HTTP 429 OpenCode Console с Retry-After, без request/response body,
 Authorization, cookies или генераций.
 Подтверждённый API исходной реализации — OpenCode 2.2.5; при новой версии
 проверьте контракт hook. Это не standalone HTTP daemon.
@@ -33,7 +33,19 @@ Latest observation (Claude): schema_version=1, source=`opencode-http-response-ho
 provider_id=`anthropic`, observed_at, endpoint, status и quota[] с name/type/family/value.
 Latest observation (Console): schema_version=1, source=`opencode-http-response-hook`,
 provider_id=`opencode`, observed_at, endpoint, status=429 и одна запись
-`free_limit_reset` — момент, когда дневной лимит бесплатных моделей вернётся.
+`rate_limit_reset` (family `rate_limit`) — время следующей попытки из Retry-After.
+Это **не подтверждение бесплатного дневного лимита**: тот же inference endpoint
+обслуживает платные/Go-модели, а разрешённые metadata не устанавливают причину 429.
+Имена файла, option `freeLimitFile` и JS exports сохранены для совместимости.
+Go reader принимает старое `free_limit_reset` только как такой же общий отказ:
+окно `provider_refusal`, metric `counter`, unit `status`, label `Отказ провайдера`,
+без Used/процентов; `observed_at` фиксирует время отказа. При now >= reset окно
+исключается, но восстановление allowance не утверждается.
+Пассивное чтение требует успешного remote snapshot и сохраняет его баланс и
+timestamp: schema v1 не имеет отдельного timestamp для metrics. С текущим hybrid
+engine новые отказы становятся видны при следующем remote refresh, а не немедленно;
+локальный отказ не делает прежний баланс свежим. Ошибочные remote ответы не
+заменяют кеш; неполная пагинация usage явно отклоняется вместо тихого усечения.
 Writes: directory 0700, file 0600, temp + rename; один writer, newest wins,
 ограниченный pending, fail-open, без timers/network/body logging. Отсутствие
 quota headers не затирает last-good. Staleness определяет Go reader.

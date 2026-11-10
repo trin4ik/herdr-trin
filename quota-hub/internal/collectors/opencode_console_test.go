@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,8 +120,8 @@ func TestOpenCodeConsoleCollectsBalanceModelsBudgetsAndGo(t *testing.T) {
 	if free == nil || free.Metric != "counter" || free.Unit != "requests" || free.Used == nil || *free.Used != 121 {
 		t.Fatalf("free model counter %+v", free)
 	}
-	if free.Scope == nil || *free.Scope != "free" {
-		t.Fatalf("free scope %+v", free.Scope)
+	if free.Scope != nil {
+		t.Fatalf("subscription billing must not imply a free-model pool: %+v", free.Scope)
 	}
 	if free.Counters["input_tokens"] != 314460 || free.Counters["cost_usd"] != 0 {
 		t.Fatalf("counters %+v", free.Counters)
@@ -204,7 +206,7 @@ func TestOpenCodeConsoleRefusesExpiredOrAmbiguousCredentials(t *testing.T) {
 	_ = file
 }
 
-func TestOpenCodeConsoleFreeLimitObservationKeepsRemoteWindows(t *testing.T) {
+func TestOpenCodeConsoleRefusalObservationKeepsRemoteSnapshot(t *testing.T) {
 	obs := filepath.Join(t.TempDir(), "opencode.latest.json")
 	body := `{"schema_version":1,"source":"opencode-http-response-hook","provider_id":"opencode",
 	 "observed_at":"2026-11-04T11:55:00.000Z","status":429,
@@ -234,9 +236,15 @@ func TestOpenCodeConsoleFreeLimitObservationKeepsRemoteWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	free := findQuota(passive.Quotas, "free_models")
-	if free == nil || free.UsedPercent == nil || *free.UsedPercent != 100 {
+	free := findQuota(passive.Quotas, "provider_refusal")
+	if free == nil || free.Metric != "counter" || free.Unit != "status" || free.Used != nil || free.UsedPercent != nil || free.RemainingPercent != nil {
 		t.Fatalf("free limit %+v", free)
+	}
+	if free.Label == nil || *free.Label != "Отказ провайдера" || free.ObservedAt == nil || !free.ObservedAt.Equal(time.Date(2026, 11, 4, 11, 55, 0, 0, time.UTC)) {
+		t.Fatalf("generic refusal provenance %+v", free)
+	}
+	if !reflect.DeepEqual(passive.Metrics, res.Metrics) || !passive.ObservedAt.Equal(res.ObservedAt) {
+		t.Fatalf("passive lost balance or refreshed its timestamp: %+v", passive)
 	}
 	if free.Window.ResetAt == nil || !free.Window.ResetAt.Equal(time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("free reset %+v", free.Window)
@@ -247,6 +255,211 @@ func TestOpenCodeConsoleFreeLimitObservationKeepsRemoteWindows(t *testing.T) {
 	if findQuota(passive.Quotas, "go_weekly") == nil {
 		t.Fatal("passive observation dropped the Go meters")
 	}
+}
+
+func writeConsoleRefusal(t *testing.T, file, name string, at, reset time.Time) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"schema_version": 1, "source": "opencode-http-response-hook", "provider_id": "opencode",
+		"observed_at": at.Format(time.RFC3339Nano), "status": 429,
+		"quota": []map[string]any{{"name": name, "type": "time", "value": reset.Format(time.RFC3339Nano)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newConsoleForTest(t *testing.T, file string, handler http.HandlerFunc, now func() time.Time) *openCodeConsoleCollector {
+	t.Helper()
+	oc := serve(t, openCodeHandler(t, []byte(consoleCredentials), basicFor(testServicePassword)))
+	registration := registrationFor(t, oc.URL, testServicePassword)
+	prov := serve(t, handler)
+	options := opts(map[string]string{"console": prov.URL, "console_go": prov.URL + "/zen/go/v1/usage"})
+	options.Now = now
+	c, err := New(consoleSpec(registration, file), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.(*openCodeConsoleCollector)
+}
+
+func TestConsoleRefusalExpiryAndSnapshotProvenance(t *testing.T) {
+	for _, name := range []string{"rate_limit_reset", "free_limit_reset"} {
+		t.Run(name, func(t *testing.T) {
+			now := fakeNow
+			file := filepath.Join(t.TempDir(), "observed.json")
+			reset := now.Add(time.Hour)
+			writeConsoleRefusal(t, file, name, now, reset)
+			c := newConsoleForTest(t, file, consoleHandler(t, http.StatusOK, nil), func() time.Time { return now })
+			// No remote provenance: do not fabricate a fresh balance-less snapshot.
+			if _, err := c.Observe(context.Background()); err == nil {
+				t.Fatal("accepted passive snapshot without remote provenance")
+			}
+			remote, err := c.Fetch(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if findQuota(remote.Quotas, "provider_refusal") == nil {
+				t.Fatal("pending refusal was lost on initial remote fetch")
+			}
+			now = now.Add(time.Minute)
+			writeConsoleRefusal(t, file, name, now, reset)
+			passive, err := c.Observe(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := findQuota(passive.Quotas, "provider_refusal")
+			if q == nil || q.ObservedAt == nil || !q.ObservedAt.Equal(now) || q.Used != nil || q.UsedPercent != nil || q.RemainingPercent != nil {
+				t.Fatalf("bad refusal %+v", q)
+			}
+			if !reflect.DeepEqual(passive.Metrics, remote.Metrics) || !passive.ObservedAt.Equal(remote.ObservedAt) {
+				t.Fatal("passive snapshot dropped or refreshed money")
+			}
+			// An older file must not replace the latest refusal's provenance.
+			writeConsoleRefusal(t, file, name, fakeNow, reset)
+			older, err := c.Observe(context.Background())
+			if err != nil || !findQuota(older.Quotas, "provider_refusal").ObservedAt.Equal(now) {
+				t.Fatalf("older file replaced refusal: %v", err)
+			}
+			now = reset // equality expires, not just strictly after
+			remote, err = c.Fetch(context.Background())
+			if err != nil || findQuota(remote.Quotas, "provider_refusal") != nil {
+				t.Fatalf("expired cached refusal in Fetch: %+v, %v", remote, err)
+			}
+			passive, err = c.Observe(context.Background())
+			if err != nil || findQuota(passive.Quotas, "provider_refusal") != nil {
+				t.Fatalf("expired refusal in Observe: %+v, %v", passive, err)
+			}
+			remote, err = c.Fetch(context.Background())
+			if err != nil || findQuota(remote.Quotas, "provider_refusal") != nil {
+				t.Fatalf("expired refusal in Fetch: %+v, %v", remote, err)
+			}
+			// A restart must not revive the unchanged, expired on-disk refusal.
+			restarted := newConsoleForTest(t, file, consoleHandler(t, http.StatusOK, nil), func() time.Time { return now })
+			_, _ = restarted.Observe(context.Background())
+			res, err := restarted.Fetch(context.Background())
+			if err != nil || findQuota(res.Quotas, "provider_refusal") != nil {
+				t.Fatalf("restart revived refusal: %+v, %v", res, err)
+			}
+		})
+	}
+}
+
+func TestConsoleGoAllowedDoesNotMeanUnlimited(t *testing.T) {
+	quotas, err := parseConsoleGo([]byte(consoleGo), fakeNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range quotas {
+		if q.Limited == nil || !*q.Limited {
+			t.Fatalf("finite allowance treated as unlimited: %+v", q)
+		}
+	}
+	body := strings.ReplaceAll(consoleGo, `"status":"ok",`, "")
+	quotas, err = parseConsoleGo([]byte(body), fakeNow)
+	if err != nil || quotas[0].Limited == nil || !*quotas[0].Limited {
+		t.Fatalf("missing status implies unlimited: %+v, %v", quotas, err)
+	}
+}
+
+func TestConsoleInvalidSuccessfulResponsesPreserveRemoteSnapshot(t *testing.T) {
+	for _, tc := range []struct{ path, body string }{
+		{"/api/billing/status", `{`},
+		{"/api/billing/status", `null`},
+		{"/api/billing/status", `{}`},
+		{"/api/billing/status", `{"balanceMicroCents":"bad"}`},
+		{"/api/billing/status", `{"balanceMicroCents":0,"creditLimitMicroCents":null}`},
+		{"/api/usage/models", `null`},
+		{"/api/usage/models", `{}`},
+		{"/api/usage/models", strings.Replace(consoleModels, `"totalRequests":"121"`, `"totalRequests":null`, 1)},
+		{"/api/usage/models", strings.Replace(consoleModels, `"totalInputTokens":"314460"`, `"totalInputTokens":-1`, 1)},
+		{"/api/usage/models", strings.Replace(consoleModels, `"pageCount":1`, `"pageCount":2`, 1)},
+		{"/api/usage/models", strings.Replace(consoleModels, `"total":2`, `"total":101`, 1)},
+		{"/api/policies/current-budgets", `null`},
+		{"/api/policies/current-budgets", ``},
+		{"/api/policies/current-budgets", `{}`},
+		{"/api/policies/current-budgets", `[null]`},
+		{"/api/policies/current-budgets", strings.Replace(consoleBudgets, `"spentDollars":5`, `"spentDollars":"bad"`, 1)},
+		{"/zen/go/v1/usage", `{}`},
+		{"/zen/go/v1/usage", `{"usage":{}}`},
+		{"/zen/go/v1/usage", strings.Replace(consoleGo, `"percent":12.5`, `"percent":"bad"`, 1)},
+		{"/zen/go/v1/usage", strings.Replace(consoleGo, `"status":"ok"`, `"status":"unknown"`, 1)},
+		{"/zen/go/v1/usage", strings.Replace(consoleGo, `"status":"ok"`, `"status":null`, 1)},
+	} {
+		t.Run(tc.path+tc.body, func(t *testing.T) {
+			now := fakeNow
+			file := filepath.Join(t.TempDir(), "observed.json")
+			writeConsoleRefusal(t, file, "rate_limit_reset", now, now.Add(time.Hour))
+			bad := false
+			handler := consoleHandler(t, http.StatusOK, nil)
+			c := newConsoleForTest(t, file, func(w http.ResponseWriter, r *http.Request) {
+				if bad && r.URL.Path == tc.path {
+					w.Write([]byte(tc.body))
+					return
+				}
+				handler(w, r)
+			}, func() time.Time { return now })
+			initial, err := c.Fetch(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			bad = true
+			now = now.Add(time.Minute)
+			if _, err := c.Fetch(context.Background()); err == nil || errInfo(t, err).Code != CodeInvalidResponse {
+				t.Fatalf("invalid success accepted: %v", err)
+			}
+			passive, err := c.Observe(context.Background())
+			if err != nil || !reflect.DeepEqual(passive.Metrics, initial.Metrics) || !passive.ObservedAt.Equal(initial.ObservedAt) {
+				t.Fatalf("failed remote wiped/refreshed cached balance: %+v, %v", passive, err)
+			}
+			for _, q := range initial.Quotas {
+				if !reflect.DeepEqual(findQuota(passive.Quotas, q.ID), &q) {
+					t.Fatalf("failed remote wiped cached window %s", q.ID)
+				}
+			}
+		})
+	}
+}
+
+func TestConsoleValidEmptyCollections(t *testing.T) {
+	if q, err := parseConsoleModels([]byte(`{"items":[],"pageInfo":{"page":1,"pageSize":100,"total":0,"pageCount":0}}`)); err != nil || len(q) != 0 {
+		t.Fatalf("empty models: %+v %v", q, err)
+	}
+	if q, err := parseConsoleBudgets([]byte(`[]`)); err != nil || len(q) != 0 {
+		t.Fatalf("empty budgets: %+v %v", q, err)
+	}
+}
+
+func TestConsoleConcurrentObserveAndFetch(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "observed.json")
+	writeConsoleRefusal(t, file, "rate_limit_reset", fakeNow, fakeNow.Add(time.Hour))
+	c := newConsoleForTest(t, file, consoleHandler(t, http.StatusOK, nil), func() time.Time { return fakeNow })
+	if _, err := c.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 3; j++ {
+				var result model.Result
+				var err error
+				if j%2 == 0 {
+					result, err = c.Observe(context.Background())
+				} else {
+					result, err = c.Fetch(context.Background())
+				}
+				if err != nil || len(result.Metrics) != 2 || !result.ObservedAt.Equal(fakeNow) {
+					t.Errorf("incoherent combined snapshot: %+v %v", result, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestOpenCodeConsoleNeverPublishesTheCredential(t *testing.T) {

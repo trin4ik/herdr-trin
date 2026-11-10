@@ -483,17 +483,17 @@ test("zero and unknown consumption both keep the track but do not invent a color
 const data = await import(`data:text/javascript,${encodeURIComponent(read("data.js"))}`);
 const consoleFixture = await import("./fixtures/quota-console.js");
 
-test("the console snapshot keeps counters, provider names and the free-model window", () => {
+test("the console snapshot keeps counters and a percentage-free refusal", () => {
   const normalized = data.normalizeSnapshot(consoleFixture.consolePayload);
   assert.equal(normalized.subscriptions.length, 1);
   const s = normalized.subscriptions[0];
   assert.equal(s.provider, "opencode");
   assert.equal(s.name, "OpenCode Console");
-  assert.equal(s.primaryWindowId, "free_models");
-  const free = s.windows.find(w => w.id === "free_models");
-  assert.equal(free.metric, "quota");
-  assert.equal(free.name, "Бесплатные модели");
-  assert.equal(free.usedPercent, 100);
+  assert.equal(s.primaryWindowId, "go_weekly");
+  const free = s.windows.find(w => w.id === "provider_refusal");
+  assert.equal(free.metric, "counter");
+  assert.equal(free.name, "Отказ провайдера");
+  assert.equal(free.usedPercent, null);
   const model = s.windows.find(w => w.id === "model_minimax_m3_1_flash_free");
   assert.equal(model.metric, "counter");
   assert.equal(model.used, 121);
@@ -501,7 +501,7 @@ test("the console snapshot keeps counters, provider names and the free-model win
   assert.equal(model.counters.input_tokens, 314460);
   assert.equal(metrics.usage(model), null, "a counter has no percentage");
   const weekly = s.windows.find(w => w.id === "go_weekly");
-  assert.equal(weekly.limited, false);
+  assert.equal(weekly.limited, true);
   assert.equal(s.balances[0].label, "Баланс кредитов");
   assert.equal(s.balances[0].value, 12.5);
 });
@@ -512,23 +512,30 @@ test("an unknown provider keeps its own name and order", () => {
   assert.equal(normalized.subscriptions[0].name, "mystery");
 });
 
-test("the console row shows the refused free models and the balance in the details", () => {
+test("the console row shows Go allowance while refusal details never invent a percentage", () => {
   const { panel, cx, timers } = fixture();
   const s = consoleFixture.consoleSubscription;
   panel.monitor.subscriptions = [s];
   const row = byID(panel.render(), `quota-${s.id}`);
-  assert.equal(text(byID(row, `quota-${s.id}-usage`)), "100%");
+  assert.equal(text(byID(row, `quota-${s.id}-usage`)), "12%");
   panel.setOpen(s.id, true, cx); timers[0].callback(cx);
   const detail = panel.render();
-  const free = byID(detail, `quota-window-${s.id}-free_models`);
-  assert.ok(text(free).includes("Бесплатные модели"));
+  const free = byID(detail, `quota-window-${s.id}-provider_refusal`);
+  assert.ok(text(free).includes("Отказ провайдера"));
+  assert.ok(text(free).includes("HTTP 429"));
+  assert.ok(text(free).includes("Повтор"));
+  assert.equal(text(free).includes("%"), false);
+  assert.equal(byID(free, `quota-track-${s.id}-provider_refusal`), undefined);
   const model = byID(detail, `quota-window-${s.id}-model_minimax_m3_1_flash_free`);
   assert.ok(text(model).includes("121 запрос"), text(model));
   assert.ok(text(model).includes("314k"), text(model));
   assert.ok(text(model).includes("бесплатно"), text(model));
+  assert.equal(model.attrs.h[0], 46 + 5 * 16 + 4 * 4 + 1,
+    "counter height includes all four gaps between five rows");
   assert.equal(text(model).includes("%"), false, "a counter never shows a percentage");
   const weekly = byID(detail, `quota-window-${s.id}-go_weekly`);
-  assert.ok(text(weekly).includes("Без лимита"));
+  assert.equal(text(weekly).includes("Без лимита"), false);
+  assert.ok(text(weekly).includes("12%"));
 });
 
 test("a pay-as-you-go row without any percentage shows the balance, not a dash", () => {

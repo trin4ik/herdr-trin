@@ -69,6 +69,11 @@ export function balanceText(balance) {
 export function counterRows(window) {
   const counters = window?.counters ?? {};
   const rows = [];
+  if (window?.unit === "status") {
+    rows.push(["Событие", "Отказ · HTTP 429"]);
+    if (window.observedAt) rows.push(["Замечен", updatedLabel(window.observedAt)]);
+    if (window.resetsAt) rows.push(["Повтор", updatedLabel(window.resetsAt)]);
+  }
   if (typeof window?.used === "number") rows.push(["Запросы", formatCount(window.used)]);
   if (typeof counters.input_tokens === "number") rows.push(["Входные токены", formatTokens(counters.input_tokens)]);
   if (typeof counters.output_tokens === "number") rows.push(["Выходные токены", formatTokens(counters.output_tokens)]);

@@ -52,7 +52,9 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   как 100-remaining. Если оба неизвестны, шкала неизвестна, а не 0%.
 - `metric`: `quota` (по умолчанию, доля лимита) или `counter` (абсолютные
   значения). Для `counter` заполняются `used`/`limit`/`remaining` и `unit`
-  (`requests`, `tokens`, `USD`), проценты остаются null. `counters` — optional
+   (`requests`, `tokens`, `USD`), проценты остаются null. Для события отказа
+   допускается `unit: status` без числового used: это не измеренный расход.
+   `counters` — optional
   объект с известными числовыми ключами (`input_tokens`, `output_tokens`,
   `cache_read_tokens`, `cost_usd`, `limit_usd`, `spent_usd`); неизвестные ключи
   игнорируются.
@@ -60,7 +62,8 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   показывает его вместо выведенного подписи окна. `scope` рядом с ним задаёт
   пул (модель, «free», «code»).
 - `limited: false` — провайдер сообщает, что окно не ограничено: UI не рисует
-  его как полностью израсходованное.
+  его как полностью израсходованное. Это не синоним «сейчас запросы разрешены»:
+  Go allowance остаётся конечным и при status=ok.
 - `observed_at` — optional время последнего подтверждения этого окна. Окна одной
   подписки могут приходить из источников с разной частотой (пассивные заголовки
   и нативный usage-endpoint), поэтому окно может быть старше самой подписки.
@@ -68,8 +71,9 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   определить 5ч/неделю. started_at/reset_at — ISO dates либо null. Календарный
   месяц не подменяется 30 днями. `scope: code|total` создаёт отдельные подписи.
 - Несколько окон/пулов не объединяются. Codex primary — weekly, затем 5ч/session/
-  первое окно; остальные — 5ч/session/первое. Для `opencode` primary — отказ
-  свободных моделей, затем Go weekly/monthly/rolling. Проценты в строке округлены,
+  первое окно; остальные — 5ч/session/первое. Для `opencode` primary —
+  Go weekly/monthly/rolling, затем первое окно; отказ остаётся событием без
+  процента, строка без измеренного allowance показывает баланс. Проценты в строке округлены,
   в деталях сохраняется точность; абсолютные даты показываются UTC+3.
 - `metrics[]` с `metric: balance`, id, numeric value, unit — баланс отдельно
   от процента квоты (credits_balance/purchased_balance/credit_limit получают
@@ -92,9 +96,14 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
 - OpenCode Console: `GET /console/api/billing/status` (баланс),
   `/console/api/usage/models` (счётчики по моделям), `/console/api/policies/current-budgets`
   (бюджеты), `GET /zen/go/v1/usage` (Go-метры; 403 — нет подписки Go, это не ошибка).
-  Остаток бесплатных моделей Console не публикует: единственный факт — отказ с
-  429 и `Retry-After`, его наблюдает passive-половина подписки (файл наблюдений
-  `provider_id: opencode`, запись `free_limit_reset`).
+  Остаток бесплатных моделей Console не публикует. Passive-половина наблюдает
+  HTTP 429 и `Retry-After` (файл `provider_id: opencode`, `rate_limit_reset`).
+  Одних этих метаданных недостаточно, чтобы отличить дневной free-cap от Go,
+  paid или общего throttling: UI пишет «Отказ провайдера», а не объявляет
+  лимит всех бесплатных моделей. Legacy `free_limit_reset` читается с той же
+  консервативной семантикой. Проценты/остаток из отказа не вычисляются;
+  после времени повтора событие не считается действующим ограничением,
+  но восстановление allowance тоже не выдумывается.
 
 Полный четырёхпровайдерный synthetic fixture:
 `layout/trin/tests/fixtures/quota-v1.json`; исполняемый UI-validator —

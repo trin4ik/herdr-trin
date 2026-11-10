@@ -1,5 +1,36 @@
 # Публичный журнал
 
+## 2026-11-10 — повторное ревью деплоя
+
+- Независимое ревью обнаружило непокрытые ошибки deploy.sh: отсутствие отката
+  при ошибке restart, неатомарное восстановление работающего executable,
+  неверный Git root при запуске через symlink и чрезмерные утверждения об откате.
+  Прежние успешные live-деплои не проверяли failure paths. Исправлены atomic
+  install/restore, проверяемый rollback, physical Git root, config validation,
+  concurrent deploy lock и exact HTTP 200 плюс active unit. Добавлены README
+  и 10 проходящих offline-регрессий; production failure injection не выполнялась.
+- Авторизованная Console-подписка включена на машине владельца: live snapshot
+  содержит счётчик запросов и токены free-модели без выдуманного процента.
+  Непрерывность прежней истории сбора и обновление bridge проверены отдельно.
+- UI (`data.js`, `metrics.js`, Console fixture/tests) больше не приписывает
+  отказу процент/причину; конечный Go allowance не называется безлимитным.
+  Событие содержит время наблюдения и повтора. Блок квот в `trin.json`
+  увеличен до 180px для пяти строк; узкий rail сохраняет прокрутку.
+- Console collector/bridge и тесты: generic отказ истекает после Retry-After,
+  passive не стирает баланс и не освежает старые деньги; malformed/truncated
+  HTTP-200 ответы не заменяют last-good. Subscription billing не считается
+  доказательством бесплатности модели. Counter-карточка учитывает межстрочные
+  gaps и длинные подписи токенов (`details.js`).
+- Ограничения: публикация нового отказа ждёт remote refresh (штатно до 5 минут;
+  при outage — дольше); после restart нужен первый успешный remote snapshot.
+  Ненулевой масштаб MicroCents/USD не подтверждён provider implementation,
+  делитель не менялся только на основании имени поля. Live 429 не провоцировался.
+- Проверено: `go test -race ./...`, `go vet ./...`, 30 bridge и 203 layout
+  JS-теста, 10 offline deploy-тестов, 7 public/installer Python-тестов, native
+  check Quotas, privacy gate (172 кандидата) и redacted Gitleaks staged:
+  без ошибок/находок. Реальные failure/rollback на production не провоцировались;
+  светлая тема и узкий rail вживую не проверены.
+
 ## 2026-11-10 — OpenCode Console и все окна Claude Code
 
 - Claude Code: usage-endpoint Anthropic отдаёт окна в расширяемом массиве
@@ -13,9 +44,9 @@
 - Новый провайдер `opencode` читает рабочее пространство OpenCode Console
   (pay-as-you-go): баланс, счётчики по моделям, бюджеты и метры Go. Кред — активная
   интеграция `opencode` локального сервиса OpenCode, как у Ollama и Kimi; origin
-  Console зашит в код, сессия не обновляется. Остатка бесплатных моделей Console
-  не публикует, поэтому bridge-плагин теперь записывает отказ 429 с моментом
-  сброса.
+  Console зашит в код, сессия не обновляется. Подтверждённого API остатка
+  бесплатных моделей не найдено; bridge записывает generic отказ 429 с временем
+  повтора, не делая вывода о причине или восстановлении allowance.
 - Схема v1 расширена только optional-полями: `label`, `limited`, `observed_at`,
   `counters` и `metric: counter`. Старые клиенты их игнорируют. Мод показывает
   счётчики значениями, а не выдуманным процентом, помечает неограниченное окно

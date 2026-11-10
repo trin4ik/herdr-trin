@@ -1,9 +1,8 @@
 // Passive OpenCode Console observer.
 //
-// The Console publishes no remaining counter for its free models: it refuses a
-// request with 429 and a Retry-After header that says when the daily allowance
-// comes back. That refusal is the only fact the collector can use, so this
-// observer records exactly that: the provider, the time and the reset moment.
+// A 429 with Retry-After establishes only a provider refusal and its retry time.
+// Allowed metadata cannot distinguish a free allowance from paid/Go throttling.
+// Never infer a model class, allowance, percentage or guaranteed recovery.
 // Nothing else of the response is read or stored.
 export const FREE_LIMIT_PROVIDER_ID = "opencode"
 export const FREE_LIMIT_SOURCE = "opencode-http-response-hook"
@@ -47,7 +46,7 @@ export function readRetryAfter(headers, now = Date.now()) {
 }
 
 /**
- * Returns the only object that is ever persisted for a refused free request, or
+ * Returns the only object that is ever persisted for a refused request, or
  * null when the response is not a refusal the collector can use.
  */
 export function buildFreeLimitObservation({ url, status, headers, observedAt, now = Date.now }) {
@@ -65,9 +64,9 @@ export function buildFreeLimitObservation({ url, status, headers, observedAt, no
     status,
     quota: [
       {
-        name: "free_limit_reset",
+        name: "rate_limit_reset",
         type: "time",
-        family: "free_limit",
+        family: "rate_limit",
         value: new Date(reset).toISOString(),
       },
     ],

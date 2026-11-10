@@ -11,7 +11,7 @@ export const consoleSubscription = {
   plan: null,
   accountEmail: null,
   source: "opencode_console",
-  primaryWindowId: "free_models",
+  primaryWindowId: "go_weekly",
   observedAt: "2026-11-04T09:58:00Z",
   lastAttemptAt: "2026-11-04T09:59:00Z",
   nextAttemptAt: "2026-11-04T10:03:00Z",
@@ -22,8 +22,8 @@ export const consoleSubscription = {
   balances: [{ label: "Баланс кредитов", value: 12.5, unit: "USD" }],
   windows: [
     {
-      id: "free_models", metric: "quota", unit: "percent", name: "Бесплатные модели",
-      label: "Бесплатные модели", usedPercent: 100, remainingPercent: 0, used: null, limit: null,
+      id: "provider_refusal", metric: "counter", unit: "status", name: "Отказ провайдера",
+      label: "Отказ провайдера", usedPercent: null, remainingPercent: null, used: null, limit: null,
       remaining: null, counters: {}, limited: null, observedAt: "2026-11-04T09:58:00Z",
       startedAt: null, resetsAt: after(840), durationSeconds: null, period: null, scope: null,
     },
@@ -38,7 +38,7 @@ export const consoleSubscription = {
     {
       id: "go_weekly", metric: "quota", unit: "percent", name: "Go · Неделя", label: "Go · Неделя",
       usedPercent: 12, remainingPercent: 88, used: null, limit: null, remaining: null, counters: {},
-      limited: false, observedAt: "2026-11-04T09:58:00Z", startedAt: null, resetsAt: after(4320),
+      limited: true, observedAt: "2026-11-04T09:58:00Z", startedAt: null, resetsAt: after(4320),
       durationSeconds: 604800, period: "week", scope: null,
     },
   ],
@@ -64,8 +64,8 @@ export const consolePayload = {
     error: null,
     quotas: [
       {
-        id: "free_models", metric: "quota", unit: "percent", used_percent: 100, remaining_percent: 0,
-        label: "Бесплатные модели", observed_at: "2026-11-04T09:58:00Z",
+        id: "provider_refusal", metric: "counter", unit: "status", used_percent: null, remaining_percent: null,
+        label: "Отказ провайдера", observed_at: "2026-11-04T09:58:00Z",
         window: { kind: "unknown", period: null, duration_seconds: null, started_at: null, reset_at: after(840) },
         authority: "provider_reported",
       },
@@ -78,7 +78,7 @@ export const consolePayload = {
       },
       {
         id: "go_weekly", metric: "quota", unit: "percent", used_percent: 12, remaining_percent: 88,
-        label: "Go · Неделя", limited: false, observed_at: "2026-11-04T09:58:00Z",
+        label: "Go · Неделя", limited: true, observed_at: "2026-11-04T09:58:00Z",
         window: { kind: "unknown", period: "week", duration_seconds: 604800, started_at: null, reset_at: after(4320) },
         authority: "provider_reported",
       },

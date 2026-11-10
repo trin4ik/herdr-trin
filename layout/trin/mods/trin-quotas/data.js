@@ -81,11 +81,11 @@ export function normalizeSnapshot(payload) {
     const identity = PROVIDERS[s.provider] ?? { provider: s.provider, name: s.provider, order: 5 };
     const windows = (s.quotas ?? []).map(normalizeQuota);
     if (new Set(windows.map(w => w.id)).size !== windows.length) throw new Error("Повторяющиеся окна лимитов");
-    // The row shows the window that matters most: for the Console the refused
-    // free models, then the Go allowance, then the usual session/weekly rules.
+    // Only measured allowances belong in the Console percentage row. An observed
+    // refusal has no published capacity and stays in the details without a bar.
     let primary = null;
     if (identity.provider === "opencode") {
-      primary = windows.find(w => w.id === "free_models") ?? windows.find(w => w.id === "go_weekly")
+      primary = windows.find(w => w.id === "go_weekly")
         ?? windows.find(w => w.id === "go_monthly") ?? windows.find(w => w.id === "go_rolling") ?? null;
     } else if (identity.provider === "openai") {
       primary = windows.find(w => w.period === "week" || w.durationSeconds === 604800) ?? null;

@@ -21,9 +21,8 @@ import (
 // Nothing is refreshed here. An expired Console session is reported as
 // auth_required and the operator signs in again on that machine.
 //
-// The passive half of the subscription is the free-model limit state, observed by
-// the OpenCode response hook: the Console publishes no remaining counter for free
-// models, it only refuses them with 429 and a reset time.
+// The passive half records a generic provider refusal observed by the OpenCode
+// response hook. A 429 and Retry-After cannot identify a free-model allowance.
 
 // consoleCredential is the bearer material of one Console workspace.
 type consoleCredential struct {
@@ -34,10 +33,15 @@ type consoleCredential struct {
 
 type openCodeConsoleCollector struct {
 	base
-	oc      *openCodeKey
-	server  string
-	goUsage string
-	windows windowSet
+	oc         *openCodeKey
+	server     string
+	goUsage    string
+	mu         sync.Mutex
+	remote     []model.Quota
+	metrics    []model.Metric
+	remoteAt   time.Time
+	observed   []model.Quota
+	observedAt time.Time
 }
 
 // consoleCredential reads the active Console credential of the local OpenCode
@@ -147,14 +151,21 @@ func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, err
 	if e != nil {
 		return model.Result{}, e
 	}
-	metrics := parseConsoleBilling(billing)
+	metrics, err := parseConsoleBilling(billing)
+	if err != nil {
+		return model.Result{}, err
+	}
 
 	var quotas []model.Quota
 	models, _, e := c.consoleGet(ctx, c.server+"/api/usage/models?pageSize=100", cred.token, cred.orgID, "")
 	if e != nil {
 		return model.Result{}, e
 	}
-	quotas = append(quotas, parseConsoleModels(models)...)
+	modelQuotas, err := parseConsoleModels(models)
+	if err != nil {
+		return model.Result{}, err
+	}
+	quotas = append(quotas, modelQuotas...)
 
 	// Budgets are optional: a workspace without policies answers with an empty list.
 	budgets, status, e := c.consoleGet(ctx, c.server+"/api/policies/current-budgets", cred.token, cred.orgID, "")
@@ -164,7 +175,13 @@ func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, err
 		}
 		budgets = nil
 	}
-	quotas = append(quotas, parseConsoleBudgets(budgets)...)
+	if status == http.StatusOK {
+		budgetQuotas, err := parseConsoleBudgets(budgets)
+		if err != nil {
+			return model.Result{}, err
+		}
+		quotas = append(quotas, budgetQuotas...)
+	}
 
 	// The Go allowance lives on the inference origin and is refused (403) when the
 	// workspace has no Go subscription.
@@ -174,19 +191,32 @@ func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, err
 			return model.Result{}, e
 		}
 	} else {
-		quotas = append(quotas, parseConsoleGo(goBody, observed)...)
+		goQuotas, err := parseConsoleGo(goBody, observed)
+		if err != nil {
+			return model.Result{}, err
+		}
+		quotas = append(quotas, goQuotas...)
 	}
 
-	c.windows.setRemote(quotas)
-	res, err := finish(observed, nil, c.windows.all(), metrics, nil)
+	for i := range quotas {
+		quotas[i].ObservedAt = tptr(observed)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Publish/cache only a fully validated remote snapshot. Failed requests must
+	// not partially replace the balance or windows preserved for passive reads.
+	res, err := finish(observed, nil, append(append([]model.Quota{}, quotas...), c.activeRefusals(c.now())...), metrics, nil)
 	if err != nil {
 		return model.Result{}, err
+	}
+	if c.remoteAt.IsZero() || !observed.Before(c.remoteAt) {
+		c.remote, c.metrics, c.remoteAt = quotas, metrics, observed
 	}
 	res.Source = SourceOpenCodeConsole
 	return res, nil
 }
 
-// Observe reads the passive free-model limit state. It never makes a request.
+// Observe reads the passive provider refusal. It never makes a request.
 func (c *openCodeConsoleCollector) Observe(ctx context.Context) (model.Result, error) {
 	if c.spec.ObservedFile == "" {
 		return model.Result{}, fail(CodeSourceUnavailable)
@@ -216,28 +246,41 @@ func (c *openCodeConsoleCollector) Observe(ctx context.Context) (model.Result, e
 		return model.Result{}, fail(CodeInvalidResponse)
 	}
 	var quotas []model.Quota
+	found := false
 	for _, q := range obs.Quota {
-		if q.Name != "free_limit_reset" || q.Type != "time" {
+		if (q.Name != "rate_limit_reset" && q.Name != "free_limit_reset") || q.Type != "time" {
 			continue
 		}
 		reset, ok := asTime(q.Value)
-		if !ok {
-			continue
+		found = true
+		if !ok || !reset.After(at) {
+			return model.Result{}, fail(CodeInvalidResponse)
+		}
+		if !c.now().Before(reset) {
+			continue // historical refusal, not evidence of either denial or recovery now
 		}
 		w := unknownWindow()
 		w.ResetAt = tptr(reset)
-		label := "Бесплатные модели"
+		label := "Отказ провайдера"
 		quotas = append(quotas, model.Quota{
-			ID: "free_models", Metric: "quota", Unit: "percent",
-			UsedPercent: fptr(100), RemainingPercent: fptr(0),
+			ID: "provider_refusal", Metric: "counter", Unit: "status",
 			Window: w, Authority: authority, ObservedAt: tptr(at.UTC()), Label: &label,
 		})
 	}
-	if len(quotas) == 0 {
+	if !found || len(quotas) > 1 {
 		return model.Result{}, fail(CodeInvalidResponse)
 	}
-	c.windows.setObserved(quotas)
-	res, err := finish(at.UTC(), nil, c.windows.all(), nil, nil)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !at.Before(c.observedAt) {
+		c.observed, c.observedAt = quotas, at
+	}
+	if c.remoteAt.IsZero() {
+		return model.Result{}, fail(CodeSourceUnavailable)
+	}
+	// Metrics have no individual timestamp in schema v1. Retain the remote
+	// timestamp, rather than falsely refreshing old money with a local refusal.
+	res, err := finish(c.remoteAt, nil, append(append([]model.Quota{}, c.remote...), c.activeRefusals(c.now())...), c.metrics, nil)
 	if err != nil {
 		return model.Result{}, err
 	}
@@ -245,48 +288,84 @@ func (c *openCodeConsoleCollector) Observe(ctx context.Context) (model.Result, e
 	return res, nil
 }
 
+// activeRefusals is called with mu held. Expiry removes an active refusal; it
+// never asserts that a renewed allowance is available.
+func (c *openCodeConsoleCollector) activeRefusals(now time.Time) []model.Quota {
+	var active []model.Quota
+	for _, q := range c.observed {
+		if q.Window.ResetAt != nil && now.Before(*q.Window.ResetAt) {
+			active = append(active, q)
+		}
+	}
+	return active
+}
+
 // parseConsoleBilling reads the prepaid balance of the workspace.
-func parseConsoleBilling(body []byte) []model.Metric {
+func parseConsoleBilling(body []byte) ([]model.Metric, error) {
 	top := asObject(body)
 	if top == nil {
-		return nil
+		return nil, fail(CodeInvalidResponse)
 	}
 	var metrics []model.Metric
-	if micro, ok := asNumber(top["balanceMicroCents"]); ok && micro >= 0 {
-		metrics = append(metrics, model.Metric{ID: "credits_balance", Metric: "balance", Unit: "USD",
-			Value: round6(micro / 1e6), Authority: authority})
+	micro, ok := asNumber(top["balanceMicroCents"])
+	if !ok || micro < 0 {
+		return nil, fail(CodeInvalidResponse)
 	}
-	if micro, ok := asNumber(top["creditLimitMicroCents"]); ok && micro > 0 {
-		metrics = append(metrics, model.Metric{ID: "credit_limit", Metric: "balance", Unit: "USD",
-			Value: round6(micro / 1e6), Authority: authority})
+	metrics = append(metrics, model.Metric{ID: "credits_balance", Metric: "balance", Unit: "USD",
+		Value: round6(micro / 1e6), Authority: authority})
+	if raw, exists := top["creditLimitMicroCents"]; exists {
+		micro, ok := asNumber(raw)
+		if !ok || micro < 0 {
+			return nil, fail(CodeInvalidResponse)
+		}
+		if micro > 0 {
+			metrics = append(metrics, model.Metric{ID: "credit_limit", Metric: "balance", Unit: "USD",
+				Value: round6(micro / 1e6), Authority: authority})
+		}
 	}
-	return metrics
+	return metrics, nil
 }
 
 // parseConsoleModels reads the per-model usage counters. The Console reports the
 // totals it has seen for the workspace, free models included.
-func parseConsoleModels(body []byte) []model.Quota {
+func parseConsoleModels(body []byte) ([]model.Quota, error) {
 	top := asObject(body)
 	if top == nil {
-		return nil
+		return nil, fail(CodeInvalidResponse)
 	}
 	var items []json.RawMessage
-	if json.Unmarshal(top["items"], &items) != nil {
-		return nil
+	if json.Unmarshal(top["items"], &items) != nil || items == nil {
+		return nil, fail(CodeInvalidResponse)
+	}
+	// Until the pagination request contract is confirmed, refuse a truncated
+	// snapshot rather than report partial counters as complete workspace usage.
+	pageInfo := asObject(top["pageInfo"])
+	if pageInfo == nil {
+		return nil, fail(CodeInvalidResponse)
+	}
+	page, okP := asNumber(pageInfo["page"])
+	size, okS := asNumber(pageInfo["pageSize"])
+	total, okT := asNumber(pageInfo["total"])
+	count, okC := asNumber(pageInfo["pageCount"])
+	if !okP || !okS || !okT || !okC || page != 1 || size != 100 || total != float64(len(items)) ||
+		len(items) > 100 || count < 0 || count > 1 || (len(items) > 0 && count != 1) {
+		return nil, fail(CodeInvalidResponse)
 	}
 	var quotas []model.Quota
+	ids := map[string]bool{}
 	for _, raw := range items {
 		o := asObject(raw)
 		if o == nil {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		name, ok := asString(o["model"])
-		if !ok || name == "" {
-			continue
+		if !ok || strings.TrimSpace(name) == "" || slug(name) == "" || ids[slug(name)] {
+			return nil, fail(CodeInvalidResponse)
 		}
+		ids[slug(name)] = true
 		requests, ok := asNumber(o["totalRequests"])
 		if !ok || requests < 0 {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		counters := map[string]float64{}
 		for key, field := range map[string]string{
@@ -294,46 +373,65 @@ func parseConsoleModels(body []byte) []model.Quota {
 			"output_tokens":     "totalOutputTokens",
 			"cache_read_tokens": "totalCacheReadTokens",
 		} {
-			if v, ok := asNumber(o[field]); ok && v >= 0 {
+			if raw, exists := o[field]; exists {
+				v, ok := asNumber(raw)
+				if !ok || v < 0 {
+					return nil, fail(CodeInvalidResponse)
+				}
 				counters[key] = v
 			}
 		}
-		if v, ok := asNumber(o["totalCostMicroCents"]); ok && v >= 0 {
+		if raw, exists := o["totalCostMicroCents"]; exists {
+			v, ok := asNumber(raw)
+			if !ok || v < 0 {
+				return nil, fail(CodeInvalidResponse)
+			}
 			counters["cost_usd"] = round6(v / 1e6)
 		}
-		var scope *string
-		if sub, ok := asBool(o["subscription"]); ok && !sub {
-			scope = sptr("free")
+		// Subscription billing is not evidence that inference was free. Keep the
+		// provider's model name, but do not infer a free-model pool from this flag.
+		if raw, exists := o["subscription"]; exists {
+			if string(raw) == "null" {
+				return nil, fail(CodeInvalidResponse)
+			}
+			_, ok := asBool(raw)
+			if !ok {
+				return nil, fail(CodeInvalidResponse)
+			}
 		}
 		label := name
-		quotas = append(quotas, counterQuota("model_"+slug(name), scope, &label, requests, "requests", counters, unknownWindow()))
+		quotas = append(quotas, counterQuota("model_"+slug(name), nil, &label, requests, "requests", counters, unknownWindow()))
 	}
-	return quotas
+	return quotas, nil
 }
 
 // parseConsoleBudgets reads the workspace budgets: a spent share of a limit.
-func parseConsoleBudgets(body []byte) []model.Quota {
+func parseConsoleBudgets(body []byte) ([]model.Quota, error) {
 	var list []json.RawMessage
-	if json.Unmarshal(body, &list) != nil {
-		return nil
+	if json.Unmarshal(body, &list) != nil || list == nil {
+		return nil, fail(CodeInvalidResponse)
 	}
 	var quotas []model.Quota
 	for _, raw := range list {
 		o := asObject(raw)
 		if o == nil {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		rule, ok := asString(o["ruleID"])
 		if !ok || rule == "" {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		limit, okL := asNumber(o["limitDollars"])
 		spent, okS := asNumber(o["spentDollars"])
 		if !okL || !okS || limit <= 0 || spent < 0 {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		w := unknownWindow()
-		if t, ok := asTime(o["resetsAt"]); ok {
+		if raw, exists := o["resetsAt"]; exists {
+			t, ok := asTime(raw)
+			if !ok {
+				return nil, fail(CodeInvalidResponse)
+			}
 			w.ResetAt = tptr(t)
 		}
 		scope, _ := asString(o["scope"])
@@ -350,7 +448,7 @@ func parseConsoleBudgets(body []byte) []model.Quota {
 			Counters: map[string]float64{"limit_usd": round6(limit), "spent_usd": round6(spent)},
 		})
 	}
-	return quotas
+	return quotas, nil
 }
 
 // goMeter is one window of the Go allowance.
@@ -363,14 +461,14 @@ type goMeter struct {
 }
 
 // parseConsoleGo reads the Go allowance meters: rolling, weekly and monthly.
-func parseConsoleGo(body []byte, observed time.Time) []model.Quota {
+func parseConsoleGo(body []byte, observed time.Time) ([]model.Quota, error) {
 	top := asObject(body)
 	if top == nil {
-		return nil
+		return nil, fail(CodeInvalidResponse)
 	}
 	usage := asObject(top["usage"])
 	if usage == nil {
-		return nil
+		return nil, fail(CodeInvalidResponse)
 	}
 	meters := []goMeter{
 		{id: "go_rolling", field: "rolling", label: "Go · 5 часов", duration: 18000},
@@ -381,11 +479,11 @@ func parseConsoleGo(body []byte, observed time.Time) []model.Quota {
 	for _, m := range meters {
 		o := asObject(usage[m.field])
 		if o == nil {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		percent, ok := asNumber(o["percent"])
 		if !ok || percent < 0 || percent > 100 {
-			continue
+			return nil, fail(CodeInvalidResponse)
 		}
 		w := unknownWindow()
 		if m.period != "" {
@@ -394,13 +492,21 @@ func parseConsoleGo(body []byte, observed time.Time) []model.Quota {
 		if m.duration > 0 {
 			w.DurationSeconds = i64ptr(m.duration)
 		}
-		if t, ok := asTime(o["resetsAt"]); ok {
+		if raw, exists := o["resetsAt"]; exists {
+			t, ok := asTime(raw)
+			if !ok {
+				return nil, fail(CodeInvalidResponse)
+			}
 			w.ResetAt = tptr(t)
 		}
-		limited := false
-		if status, ok := asString(o["status"]); ok {
-			limited = strings.EqualFold(status, "rate-limited")
+		if raw, exists := o["status"]; exists {
+			status, ok := asString(raw)
+			if !ok || (status != "ok" && status != "rate-limited") {
+				return nil, fail(CodeInvalidResponse)
+			}
 		}
+		// A finite allowance remains capped even while requests are allowed.
+		limited := true
 		label := m.label
 		quotas = append(quotas, model.Quota{
 			ID: m.id, Metric: "quota", Unit: "percent",
@@ -408,7 +514,7 @@ func parseConsoleGo(body []byte, observed time.Time) []model.Quota {
 			Window: w, Authority: authority, Label: &label, Limited: &limited, ObservedAt: tptr(observed),
 		})
 	}
-	return quotas
+	return quotas, nil
 }
 
 // windowSet keeps the windows of one subscription per source and publishes their

@@ -88,10 +88,18 @@ Claude account metadata/email требует отдельного account_file (
 Сессия Console не обновляется сборщиком (refresh запрещён): при 401 подписка
 сообщает `auth_required` и её нужно переоткрыть входом на этой машине.
 
-Публичного остатка бесплатных моделей Console не отдаёт ни один endpoint.
-Единственный факт об исчерпании дневного лимита — отказ 429 с `Retry-After`;
-его наблюдает bridge-плагин (второй файл, `provider_id: opencode`, запись
-`free_limit_reset`) и backend показывает окно «Бесплатные модели» со сбросом.
+Подтверждённого API остатка бесплатных моделей не найдено. Bridge наблюдает
+429 с `Retry-After` (второй файл, `provider_id: opencode`, `rate_limit_reset`),
+но этих метаданных недостаточно для определения причины: возможны free-cap,
+Go, paid или общее throttling. Backend показывает «Отказ провайдера» без
+процентов; legacy `free_limit_reset` читается с той же осторожной семантикой.
+После времени повтора событие исключается, восстановление allowance не
+выдумывается. Публикация события ждёт remote refresh (обычно до 5 минут),
+чтобы не освежать timestamp старого баланса; при outage дольше. После restart
+нужен первый успешный remote snapshot. Модели >100 пока вызывают явную ошибку
+неполного ответа вместо публикации усечённых счётчиков. Ненулевой масштаб
+MicroCents/USD требует независимого подтверждения provider implementation;
+live workspace с нулевыми балансом/стоимостью его не проверяет.
 
 ## Поведение и доступ
 
@@ -113,6 +121,41 @@ Wildcard listener по умолчанию запрещён. `allow_wildcard_list
 для контейнерного listener; это не firewall. Compose loopback bind обязателен.
 Для сети — отдельная auth/TLS/ACL, не перенос чужого deployment config.
 
+## Deploy в Linux user systemd
+
+`scripts/deploy.sh` предназначен для checkout этой монорепы на машине сервиса;
+это не Compose deploy. Требуются Linux, доступный user systemd unit, Git, Go,
+curl, flock (util-linux) и стандартные shell utilities. Unit должен запускать
+`quota-hub/bin/quota-hub` из этого checkout. Перед запуском убедитесь, что его
+конфигурация и `HEALTH_URL` относятся именно к этому unit:
+
+```sh
+CONFIG=/absolute/path/to/quota-hub.local.json \
+HEALTH_URL=http://127.0.0.1:8098/readyz \
+  ./quota-hub/scripts/deploy.sh
+```
+
+`CONFIG` обязателен: укажите **тот же файл**, что использует unit. Он проверяется
+новым бинарником через `-check-config` до замены; содержимое не выводится и
+credentials/state не читаются. Проверка не подтверждает окружение и доступность
+источников. `SERVICE` задаёт имя user unit (default `quota-hub`), `GO` — путь к
+Go, `SKIP_PULL=1` пропускает pull. Иначе выполняется `git pull --ff-only` с
+настроенного upstream; проверку доверия к источнику выполняет оператор.
+
+Скрипт блокирует параллельные запуски из этого checkout, сохраняет предыдущий
+бинарник и атомарно заменяет его. При ошибке restart или readiness он пытается
+вернуть бинарник, перезапустить и проверить unit. При отсутствии предыдущего
+бинарника откат невозможен; при неудачном откате backup остаётся в `bin/.deploy.*`.
+Исходники после pull, конфигурация и private state **не откатываются**. При
+прерывании процесса вручную может потребоваться восстановление оператором.
+
+`HEALTH_URL` должен оканчиваться на `/readyz`, возвращать HTTP 200 без redirect и
+относиться к проверяемому unit; скрипт отдельно проверяет `systemctl is-active`.
+`/readyz` означает только, что private store открыт и восстановлен: отсутствие
+учётных данных провайдера или ошибка квот сами по себе readiness не блокируют.
+Проверка URL не удостоверяет идентичность процесса: не направляйте её на proxy
+или другой сервис. Убедитесь в соответствии unit, конфига и endpoint до deploy.
+
 ## Offline-проверки
 
 Go 1.27+, Node для bridge tests. Из `quota-hub/`:
@@ -122,6 +165,7 @@ go test -race ./...
 go vet ./...
 go run ./cmd/quota-hub -config configs/docker.json -check-config
 node --test tools/opencode-bridge/test/*.test.mjs
+python3 -m unittest discover -s scripts -p 'test_deploy.py'
 ```
 
 `-check-config` не читает credentials/state и не обращается к сети.

@@ -40,7 +40,7 @@ test("Retry-After is read as seconds or a date and stays bounded", () => {
   assert.equal(readRetryAfter(null, NOW), null)
 })
 
-test("a refused free model yields exactly the reset moment", () => {
+test("a provider refusal yields a generic retry moment, not a free allowance", () => {
   const observation = buildFreeLimitObservation({
     url: "https://opencode.ai/inference/openai/v1/chat/completions",
     status: 429,
@@ -54,7 +54,8 @@ test("a refused free model yields exactly the reset moment", () => {
   assert.equal(observation.status, 429)
   assert.equal(observation.observed_at, new Date(NOW).toISOString())
   assert.equal(observation.quota.length, 1)
-  assert.equal(observation.quota[0].name, "free_limit_reset")
+  assert.equal(observation.quota[0].name, "rate_limit_reset")
+  assert.equal(observation.quota[0].family, "rate_limit")
   assert.equal(observation.quota[0].type, "time")
   assert.equal(observation.quota[0].value, new Date(NOW + 43185 * 1000).toISOString())
   const raw = JSON.stringify(observation)
@@ -83,10 +84,28 @@ test("the bridge writes the refusal to its own file and nothing else", async () 
   await bridge.drain()
   const saved = JSON.parse(await readFile(file, "utf8"))
   assert.equal(saved.provider_id, "opencode")
-  assert.equal(saved.quota[0].name, "free_limit_reset")
+  assert.equal(saved.quota[0].name, "rate_limit_reset")
   // a foreign provider never reaches the file
   bridge.handle({ ...event, model: { providerID: "anthropic" } })
   await bridge.drain()
   assert.equal(JSON.parse(await readFile(file, "utf8")).observed_at, saved.observed_at)
   await bridge.dispose()
+})
+
+test("paid and Go throttling cannot be asserted to be a free-model cap", () => {
+  for (const route of ["openai/v1/chat/completions", "go/openai/v1/responses"]) {
+    const observation = buildFreeLimitObservation({
+      url: `https://opencode.ai/inference/${route}`,
+      status: 429,
+      headers: headers({ "retry-after": "60" }),
+      observedAt: NOW,
+      now: () => NOW,
+    })
+    assert.deepEqual(observation.quota, [{
+      name: "rate_limit_reset", type: "time", family: "rate_limit",
+      value: new Date(NOW + 60000).toISOString(),
+    }])
+    assert.ok(!JSON.stringify(observation).includes("free"))
+    assert.ok(!JSON.stringify(observation).includes("percent"))
+  }
 })

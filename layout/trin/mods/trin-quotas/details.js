@@ -9,7 +9,10 @@ const expired = (window, now) => Boolean(window.resetsAt && Date.parse(window.re
 const separator = (subscription, index) => index < subscription.windows.length - 1 || Boolean(subscription.balances?.length);
 const windowHeight = (window, now, divided) => {
   // A counter window is a short list of absolute values, not a bar.
-  if (isCounter(window)) return 46 + counterRows(window).length * 16 + (divided ? 1 : 0);
+  if (isCounter(window)) {
+    const rows = counterRows(window).length;
+    return 46 + rows * 16 + Math.max(0, rows - 1) * 4 + (divided ? 1 : 0);
+  }
   return 136 + (expired(window, now) ? 20 : 0) + (divided ? 1 : 0);
 };
 const warningMessage = (subscription, monitor, now) => monitor.error?.message || subscription.error?.message
@@ -40,7 +43,7 @@ export function balanceLabel(balance) {
 export function quotaDetails(subscription, monitor, t, icon, revealed, close, viewportHeight) {
   const now = new Date().toISOString(), height = detailsHeight(subscription, monitor, viewportHeight, now);
   const item = (label, value) => h_flex().w_full().min_w(0).h(16).flex_none().gap(10).items_center().text_size(10.5).line_height("16px")
-    .child(div().w(65).flex_none().text_color(t.muted).child(label))
+    .child(div().w(112).flex_none().text_color(t.muted).child(label))
     .child(div().flex_1().min_w(0).text_right().text_color(t.foreground).child(value));
   const primary = primaryWindow(subscription), plan = planLabel(subscription.plan);
   const profile = `${subscription.accountEmail || "Аккаунт не указан"}, ${plan || "тариф не указан"}`;
