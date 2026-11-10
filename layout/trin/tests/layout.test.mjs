@@ -42,7 +42,7 @@ test("compact quota block sits outside the Spaces/Agents split, immediately abov
   const ids = sidebar.children.map(n => n.id);
   assert.deepEqual(ids.slice(-3), ["sidebar-lists", "quotas", "sidebar-footer"]);
   const quota = sidebar.children.find(n => n.id === "quotas");
-  assert.equal(quota.size.px, 180, "header and five subscription rows fit without scrolling in the wide sidebar");
+  assert.equal(quota.size.px, 152, "compact block fits the four active quota subscriptions");
   assert.equal(quota.content.mod, "trin-quotas");
 });
 
