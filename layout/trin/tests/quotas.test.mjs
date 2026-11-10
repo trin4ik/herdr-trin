@@ -567,7 +567,7 @@ test("OpenCode uses its official 4:5 logo, not the Zen Z", () => {
   assert.match(logo, /viewBox="0 0 240 300"/);
   assert.match(logo, /M180 60H60V240H180V60ZM240 300H0V0H240V300Z/);
   const { panel } = fixture();
-  for (const [size, expectedWidth, expectedHeight] of [[16, 16, 20], [22, 20, 25]]) {
+  for (const [size, expectedWidth, expectedHeight] of [[16, 12, 15], [22, 16, 20]]) {
     const mark = panel.mark(consoleFixture.consoleSubscription, {}, size);
     assert.equal(mark.childNodes[0].attrs.w[0], expectedWidth);
     assert.equal(mark.childNodes[0].attrs.h[0], expectedHeight);

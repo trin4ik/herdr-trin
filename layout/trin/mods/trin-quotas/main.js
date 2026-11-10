@@ -90,7 +90,7 @@ export default class Quotas extends View {
     if (provider === "opencode") {
       // OpenCode's own mark, not the Zen provider Z. Keep its 4:5 aspect ratio
       // and whole-pixel strokes in both the compact row and the profile header.
-      const width = size >= 20 ? 20 : 16;
+      const width = size >= 20 ? 16 : 12;
       return h_flex().size(size).flex_none().items_center().justify_center()
         .child(svg("assets/trin-providers/opencode-logo.svg").w(width).h(width * 5 / 4).text_color(t.muted));
     }
