@@ -539,3 +539,18 @@ test("a pay-as-you-go row without any percentage shows the balance, not a dash",
   const row = byID(panel.render(), `quota-${s.id}`);
   assert.equal(text(byID(row, `quota-${s.id}-usage`)), "$12.50");
 });
+
+test("a provider window name keeps its scope visible", () => {
+  const { panel, cx, timers } = fixture();
+  const s = { ...consoleFixture.consoleSubscription, id: "claude-scoped", provider: "anthropic", name: "Claude",
+    primaryWindowId: "seven_day_fable",
+    windows: [{ id: "seven_day_fable", metric: "quota", unit: "percent", name: "Неделя", label: "Неделя",
+      usedPercent: 10, remainingPercent: 90, used: null, limit: null, remaining: null, counters: {},
+      limited: null, observedAt: null, startedAt: null, resetsAt: null, durationSeconds: 604800,
+      period: "week", scope: "Fable" }] };
+  panel.monitor.subscriptions = [s];
+  panel.setOpen(s.id, true, cx); timers[0].callback(cx);
+  const detail = panel.render();
+  const window = byID(detail, `quota-window-${s.id}-seven_day_fable`);
+  assert.ok(text(window).includes("Неделя · Fable"), text(window));
+});

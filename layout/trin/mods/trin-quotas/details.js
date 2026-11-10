@@ -1,6 +1,6 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel, isCounter, counterRows, windowTitle, unlimited, scopeLabel } from "./metrics.js";
+import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel, isCounter, counterRows, windowTitle, unlimited } from "./metrics.js";
 
 // The height budget uses the same fixed line heights/padding as the builders.
 // Scroll owns overflow; individual windows and 4px tracks must never shrink.
@@ -82,8 +82,7 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
             return v_flex().id(`quota-window-${subscription.id}-${window.id}`).h(windowHeight(window, now, divided)).flex_none().py(12).gap(6)
               .when(divided, el => el.border_b(1).border_color(t.border))
               .child(h_flex().h(16).flex_none().gap(8).items_center().line_height("16px")
-                .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).tooltip(title).child(title))
-                .when(scopeLabel(window.scope), el => el.child(div().text_size(9).text_color(t.dim).child(scopeLabel(window.scope)))))
+                .child(div().flex_1().min_w(0).truncate().text_size(11.5).font_semibold().text_color(t.foreground).tooltip(title).child(title)))
               .child(v_flex().flex_none().gap(4)
                 .children(rows.map(([label, text]) => item(label, text))));
           }

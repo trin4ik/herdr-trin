@@ -9,9 +9,13 @@ export function isCounter(window) {
   return window?.metric === "counter";
 }
 
-// The provider may name a window; the derived label is the fallback.
+// The provider may name a window; the derived label is the fallback. A scope
+// (a model pool, a class of models) always stays visible.
 export function windowTitle(window) {
-  return window?.name ?? window?.label ?? "Лимит";
+  if (!window) return "Лимит";
+  const scope = scopeLabel(window.scope);
+  if (window.name) return scope ? `${window.name} · ${scope}` : window.name;
+  return window.label ?? "Лимит";
 }
 
 // A window the provider reports as uncapped must not look like a full bar.
