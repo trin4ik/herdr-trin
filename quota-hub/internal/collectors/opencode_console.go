@@ -313,7 +313,7 @@ func parseConsoleBilling(body []byte) ([]model.Metric, error) {
 	}
 	metrics = append(metrics, model.Metric{ID: "credits_balance", Metric: "balance", Unit: "USD",
 		Value: round6(micro / 1e6), Authority: authority})
-	if raw, exists := top["creditLimitMicroCents"]; exists {
+	if raw, exists := top["creditLimitMicroCents"]; exists && string(raw) != "null" {
 		micro, ok := asNumber(raw)
 		if !ok || micro < 0 {
 			return nil, fail(CodeInvalidResponse)

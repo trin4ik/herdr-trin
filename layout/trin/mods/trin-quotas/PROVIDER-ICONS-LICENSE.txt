@@ -4,10 +4,11 @@ https://github.com/lobehub/lobe-icons/blob/master/packages/static-svg/icons/kimi
 Unmodified SVG files. Brand marks remain the property of their respective owners.
 OpenAI/Anthropic assets belong to the existing Agents installation; see its license.
 
-OpenCode mark downloaded 2026-11-10 from the OpenCode provider icon set:
-https://github.com/anomalyco/opencode/blob/dev/packages/ui/src/assets/icons/provider/opencode.svg
-Unmodified SVG file, MIT licensed (Copyright (c) 2025 Anomaly Innovations Inc.).
-The mark remains the property of its owner and is used to identify the service.
+OpenCode logo downloaded 2026-11-10 from the official brand assets:
+https://opencode.ai/brand/files/opencode-logo-transparent-dark.svg
+Unmodified SVG file; usage guidelines: https://opencode.ai/brand
+OpenCode and its logo are trademarks of Anomaly, used only to identify the service.
+This asset replaces the previously mistaken Zen provider Z; no endorsement implied.
 
 MIT License
 

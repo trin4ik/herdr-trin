@@ -2,6 +2,19 @@
 
 ## 2026-11-10 — повторное ревью деплоя
 
+- По визуальному замечанию заменён ошибочный Zen/Z на официальный OpenCode
+  logo с пропорциями 4:5 (`provider-opencode.svg`, `main.js`); исправлены
+  provenance/brand notices. Подписи и значения карточки не переносятся друг
+  на друга (`details.js`), длинное значение доступно в tooltip.
+- Installer теперь устанавливает OpenCode logo asset; regression сверяет bytes.
+  Новый asset path обходит кеш ошибочного знака без restart приложения.
+  Живой screenshot подтверждает логотип в header/строке и отсутствие наложения
+  токенов. Проходят 205 JS, 7 installer/public Python и native check.
+- Live rollout через legacy symlink прошёл config validation и `/readyz`.
+  Дополнительно исправлен обнаруженный реальный nullable credit limit:
+  `creditLimitMicroCents: null` означает отсутствие кредитного лимита,
+  а не повреждённый billing response; добавлена отдельная регрессия.
+
 - Независимое ревью обнаружило непокрытые ошибки deploy.sh: отсутствие отката
   при ошибке restart, неатомарное восстановление работающего executable,
   неверный Git root при запуске через symlink и чрезмерные утверждения об откате.

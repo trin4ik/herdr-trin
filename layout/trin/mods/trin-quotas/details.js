@@ -43,8 +43,8 @@ export function balanceLabel(balance) {
 export function quotaDetails(subscription, monitor, t, icon, revealed, close, viewportHeight) {
   const now = new Date().toISOString(), height = detailsHeight(subscription, monitor, viewportHeight, now);
   const item = (label, value) => h_flex().w_full().min_w(0).h(16).flex_none().gap(10).items_center().text_size(10.5).line_height("16px")
-    .child(div().w(112).flex_none().text_color(t.muted).child(label))
-    .child(div().flex_1().min_w(0).text_right().text_color(t.foreground).child(value));
+    .child(div().w(112).flex_none().truncate().text_color(t.muted).tooltip(label).child(label))
+    .child(div().flex_1().min_w(0).truncate().text_right().text_color(t.foreground).tooltip(value).child(value));
   const primary = primaryWindow(subscription), plan = planLabel(subscription.plan);
   const profile = `${subscription.accountEmail || "Аккаунт не указан"}, ${plan || "тариф не указан"}`;
   const warning = warningMessage(subscription, monitor, now);

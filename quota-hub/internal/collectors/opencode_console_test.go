@@ -25,6 +25,13 @@ const consoleCredentials = `{"data":[
 const consoleBilling = `{"billingMode":"prepaid","mode":"pay-as-you-go","balanceMicroCents":"1250000",
  "creditLimitMicroCents":"5000000","availableMicroCents":"1250000","canPurchaseCredits":true}`
 
+func TestConsoleBillingAllowsAbsentCreditFacility(t *testing.T) {
+	metrics, err := parseConsoleBilling([]byte(`{"balanceMicroCents":"0","creditLimitMicroCents":null}`))
+	if err != nil || len(metrics) != 1 || metrics[0].ID != "credits_balance" || metrics[0].Value != 0 {
+		t.Fatalf("a null credit facility is not an invalid balance: metrics=%+v err=%v", metrics, err)
+	}
+}
+
 const consoleModels = `{"items":[
  {"model":"minimax-m3.1-flash-free","provider":"opencode","subscription":false,"totalRequests":"121",
   "totalInputTokens":"314460","totalOutputTokens":"71236","totalCacheReadTokens":"13490246",
@@ -371,7 +378,7 @@ func TestConsoleInvalidSuccessfulResponsesPreserveRemoteSnapshot(t *testing.T) {
 		{"/api/billing/status", `null`},
 		{"/api/billing/status", `{}`},
 		{"/api/billing/status", `{"balanceMicroCents":"bad"}`},
-		{"/api/billing/status", `{"balanceMicroCents":0,"creditLimitMicroCents":null}`},
+		{"/api/billing/status", `{"balanceMicroCents":0,"creditLimitMicroCents":true}`},
 		{"/api/usage/models", `null`},
 		{"/api/usage/models", `{}`},
 		{"/api/usage/models", strings.Replace(consoleModels, `"totalRequests":"121"`, `"totalRequests":null`, 1)},

@@ -87,7 +87,14 @@ export default class Quotas extends View {
 
   mark(subscription, t, size = 16) {
     const provider = subscription.provider;
-    if (["openai", "anthropic", "ollama", "kimi", "opencode"].includes(provider)) {
+    if (provider === "opencode") {
+      // OpenCode's own mark, not the Zen provider Z. Keep its 4:5 aspect ratio
+      // and whole-pixel strokes in both the compact row and the profile header.
+      const width = size >= 20 ? 20 : 16;
+      return h_flex().size(size).flex_none().items_center().justify_center()
+        .child(svg("assets/trin-providers/opencode-logo.svg").w(width).h(width * 5 / 4).text_color(t.muted));
+    }
+    if (["openai", "anthropic", "ollama", "kimi"].includes(provider)) {
       // Existing real asset copies also used by Agents (external mod symlinks
       // cannot be used as SVG assets through the native asset sandbox).
       return h_flex().size(size).flex_none().items_center().justify_center()

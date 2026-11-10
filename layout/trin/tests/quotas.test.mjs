@@ -561,3 +561,30 @@ test("a provider window name keeps its scope visible", () => {
   const window = byID(detail, `quota-window-${s.id}-seven_day_fable`);
   assert.ok(text(window).includes("Неделя · Fable"), text(window));
 });
+
+test("OpenCode uses its official 4:5 logo, not the Zen Z", () => {
+  const logo = read("provider-opencode.svg");
+  assert.match(logo, /viewBox="0 0 240 300"/);
+  assert.match(logo, /M180 60H60V240H180V60ZM240 300H0V0H240V300Z/);
+  const { panel } = fixture();
+  for (const [size, expectedWidth, expectedHeight] of [[16, 16, 20], [22, 20, 25]]) {
+    const mark = panel.mark(consoleFixture.consoleSubscription, {}, size);
+    assert.equal(mark.childNodes[0].attrs.w[0], expectedWidth);
+    assert.equal(mark.childNodes[0].attrs.h[0], expectedHeight);
+  }
+});
+
+test("counter labels and values cannot wrap into adjacent rows", () => {
+  const { panel, cx, timers } = fixture();
+  const s = consoleFixture.consoleSubscription;
+  panel.monitor.subscriptions = [s];
+  panel.setOpen(s.id, true, cx); timers[0].callback(cx);
+  const model = byID(panel.render(), `quota-window-${s.id}-model_minimax_m3_1_flash_free`);
+  const label = nodes(model).find(el => el.childNodes.includes("Входные токены"));
+  assert.equal(label.attrs.w[0], 112);
+  assert.ok(label.attrs.truncate);
+  assert.equal(label.attrs.tooltip[0], "Входные токены");
+  const value = nodes(model).find(el => el.childNodes.includes("314k"));
+  assert.ok(value.attrs.truncate);
+  assert.ok(value.attrs.min_w);
+});

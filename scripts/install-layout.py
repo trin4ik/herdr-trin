@@ -35,6 +35,7 @@ def install(config):
                for name in ("openai", "anthropic")},
             **{name + ".svg": source / "mods/trin-quotas" / ("provider-" + name + ".svg")
                for name in ("ollama", "kimi")},
+            "opencode-logo.svg": source / "mods/trin-quotas/provider-opencode.svg",
         },
     }
     # All conflict and input checks happen before any writes.

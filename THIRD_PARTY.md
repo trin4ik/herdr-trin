@@ -24,6 +24,10 @@ notice is retained at `docs/licenses/Lucide.txt`; brand logos are not Lucide ico
   from OpenCode v2.2.5, MIT notice retained.
 - `layout/trin/mods/trin-quotas/PROVIDER-ICONS-LICENSE.txt`: Ollama/Kimi SVGs
   from LobeHub Icons, MIT notice retained.
+- `layout/trin/mods/trin-quotas/provider-opencode.svg`: unmodified official
+  OpenCode logo from https://opencode.ai/brand (not the Zen provider mark).
+  Anomaly's trademark/brand usage rules apply; the root MIT grant does not
+  grant trademark rights to this asset.
 - Trademarks remain the property of their respective owners. No affiliation
   or endorsement is implied by their appearance in a quota dashboard.
 

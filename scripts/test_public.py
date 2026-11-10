@@ -68,6 +68,8 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(keys["global"], {"ctrl-x": "example"})
             self.assertIn("layout:trin", keys)
             self.assertTrue((root / "assets/trin-providers/openai.svg").is_file())
+            self.assertEqual((root / "assets/trin-providers/opencode-logo.svg").read_bytes(),
+                             (installer.ROOT / "layout/trin/mods/trin-quotas/provider-opencode.svg").read_bytes())
             self.assertFalse((root / "assets/trin-providers/openai.svg").is_symlink())
             self.assertFalse((root / "mods/trin-quotas/gpui-kit.d.ts").exists())
             with self.assertRaises(ValueError):
