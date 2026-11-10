@@ -56,7 +56,7 @@ systemctl --user restart "$SERVICE" || fail "не перезапустился $
 
 ready=0
 for _ in $(seq 1 30); do
-  if curl --fail --silent --show-error --max-time 5 -o /dev/null "$HEALTH_URL"; then ready=1; break; fi
+  if curl --fail --silent --max-time 5 -o /dev/null "$HEALTH_URL" 2>/dev/null; then ready=1; break; fi
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
