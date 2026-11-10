@@ -958,10 +958,23 @@ func cloneQuotas(in []model.Quota) []model.Quota {
 			Used: cloneF(q.Used), Limit: cloneF(q.Limit), Remaining: cloneF(q.Remaining),
 			UsedPercent: cloneF(q.UsedPercent), RemainingPercent: cloneF(q.RemainingPercent),
 			Authority: q.Authority,
+			Label:      cloneStr(q.Label),
+			ObservedAt: cloneTime(q.ObservedAt),
 			Window: model.Window{
 				Kind: q.Window.Kind, Period: cloneStr(q.Window.Period),
 				StartedAt: cloneTime(q.Window.StartedAt), ResetAt: cloneTime(q.Window.ResetAt),
 			},
+		}
+		if q.Limited != nil {
+			limited := *q.Limited
+			out[i].Limited = &limited
+		}
+		if len(q.Counters) > 0 {
+			counters := make(map[string]float64, len(q.Counters))
+			for key, value := range q.Counters {
+				counters[key] = value
+			}
+			out[i].Counters = counters
 		}
 		if q.Window.DurationSeconds != nil {
 			d := *q.Window.DurationSeconds

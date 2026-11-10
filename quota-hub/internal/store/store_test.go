@@ -542,3 +542,38 @@ func TestConcurrentReadersAndDeepCopies(t *testing.T) {
 		t.Fatalf("%+v", sub.Quotas[0])
 	}
 }
+
+func TestOptionalQuotaFieldsSurviveTheStore(t *testing.T) {
+	s := open(t, t.TempDir())
+	defer s.Close()
+	observed := t0.Add(time.Minute)
+	limited := false
+	res := &model.Result{ObservedAt: t0, Quotas: []model.Quota{{
+		ID: "model_free", Metric: "counter", Unit: "requests", Used: f64(121),
+		Label: strPtr("minimax-m3.1-flash-free"), Scope: strPtr("free"), Limited: &limited,
+		ObservedAt: &observed, Counters: map[string]float64{"input_tokens": 314460, "cost_usd": 0.015},
+		Window: model.Window{Kind: "unknown"}, Authority: "provider_reported",
+	}}}
+	if err := s.Commit(okUpdate("claude", t0, res)); err != nil {
+		t.Fatal(err)
+	}
+	sub, ok := s.GetAt("claude", t0)
+	if !ok {
+		t.Fatal("missing subscription")
+	}
+	q := sub.Quotas[0]
+	if q.Label == nil || *q.Label != "minimax-m3.1-flash-free" {
+		t.Fatalf("label %+v", q.Label)
+	}
+	if q.Limited == nil || *q.Limited {
+		t.Fatalf("limited %+v", q.Limited)
+	}
+	if q.ObservedAt == nil || !q.ObservedAt.Equal(observed) {
+		t.Fatalf("observed at %+v", q.ObservedAt)
+	}
+	if q.Counters["input_tokens"] != 314460 || q.Counters["cost_usd"] != 0.015 {
+		t.Fatalf("counters %+v", q.Counters)
+	}
+}
+
+func strPtr(v string) *string { return &v }
