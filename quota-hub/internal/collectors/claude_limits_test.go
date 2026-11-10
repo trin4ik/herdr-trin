@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"quota-hub/internal/model"
 )
 
 // A synthetic usage response in the current shape: the extensible limits[] array
@@ -132,4 +135,32 @@ func TestClaudeHybridKeepsTheScopedLimitWhenThePassiveObservationArrives(t *test
 
 func writeFile(path, body string) error {
 	return os.WriteFile(path, []byte(body), 0o600)
+}
+
+func TestWindowSetKeepsAStableOrder(t *testing.T) {
+	var set windowSet
+	older := fakeNow.Add(-time.Minute)
+	newer := fakeNow
+	set.setRemote([]model.Quota{
+		{ID: "five_hour", UsedPercent: fptr(100), ObservedAt: &newer},
+		{ID: "seven_day", UsedPercent: fptr(41), ObservedAt: &newer},
+		{ID: "seven_day_fable", UsedPercent: fptr(10), ObservedAt: &newer},
+	})
+	set.setObserved([]model.Quota{
+		{ID: "five_hour", UsedPercent: fptr(90), ObservedAt: &newer},
+		{ID: "free_models", UsedPercent: fptr(100), ObservedAt: &older},
+	})
+	all := set.all()
+	if len(all) != 4 {
+		t.Fatalf("windows %+v", all)
+	}
+	if all[0].ID != "five_hour" || all[1].ID != "seven_day" || all[2].ID != "seven_day_fable" {
+		t.Fatalf("order %+v", all)
+	}
+	if all[0].UsedPercent == nil || *all[0].UsedPercent != 90 {
+		t.Fatalf("the newer value must win: %+v", all[0])
+	}
+	if all[3].ID != "free_models" {
+		t.Fatalf("an observed-only window must be kept: %+v", all[3])
+	}
 }

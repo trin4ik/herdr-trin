@@ -412,46 +412,52 @@ func parseConsoleGo(body []byte, observed time.Time) []model.Quota {
 }
 
 // windowSet keeps the windows of one subscription per source and publishes their
-// union. A window only one source knows about is kept, so a limit that only the
-// remote API reports does not disappear when a passive observation arrives.
+// union in a stable order. A window only one source knows about is kept, so a
+// limit that only the remote API reports does not disappear when a passive
+// observation arrives.
 type windowSet struct {
 	mu       sync.Mutex
-	remote   map[string]model.Quota
-	observed map[string]model.Quota
+	remote   []model.Quota
+	observed []model.Quota
 }
 
 func (w *windowSet) setRemote(quotas []model.Quota) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.remote = indexQuotas(quotas)
+	w.remote = quotas
 }
 
 func (w *windowSet) setObserved(quotas []model.Quota) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.observed = indexQuotas(quotas)
+	w.observed = quotas
 }
 
-// all merges both sources by id. The newer value of an id wins.
+// all merges both sources by id and keeps the order of the remote source, so
+// the windows of a subscription do not jump around between refreshes. The newer
+// value of an id wins.
 func (w *windowSet) all() []model.Quota {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	merged := map[string]model.Quota{}
-	for id, q := range w.remote {
-		merged[id] = q
-	}
-	for id, q := range w.observed {
-		old, known := merged[id]
-		if known && quotaNewer(old, q) {
-			continue
+	merged := make([]model.Quota, 0, len(w.remote)+len(w.observed))
+	index := map[string]int{}
+	put := func(q model.Quota) {
+		if i, known := index[q.ID]; known {
+			if !quotaNewer(merged[i], q) {
+				merged[i] = q
+			}
+			return
 		}
-		merged[id] = q
+		index[q.ID] = len(merged)
+		merged = append(merged, q)
 	}
-	out := make([]model.Quota, 0, len(merged))
-	for _, q := range merged {
-		out = append(out, q)
+	for _, q := range w.remote {
+		put(q)
 	}
-	return out
+	for _, q := range w.observed {
+		put(q)
+	}
+	return merged
 }
 
 // quotaNewer reports whether a is confirmed more recently than b.
@@ -463,12 +469,4 @@ func quotaNewer(a, b model.Quota) bool {
 		return true
 	}
 	return a.ObservedAt.After(*b.ObservedAt)
-}
-
-func indexQuotas(quotas []model.Quota) map[string]model.Quota {
-	out := make(map[string]model.Quota, len(quotas))
-	for _, q := range quotas {
-		out[q.ID] = q
-	}
-	return out
 }
