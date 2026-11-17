@@ -5,7 +5,7 @@
 
 - Источники: native Codex OAuth; Claude passive headers + native OAuth fallback;
   Ollama/Kimi — allowlisted активные ключи OpenCode credential API;
-  OpenCode Console — активная интеграция `opencode` того же credential API.
+  OpenCode Go — активная интеграция `opencode` того же credential API → только Go usage.
 - Никогда не обновлять/ротировать credentials, не вызывать auth resolver или
   refresh endpoint. Не копировать БД, service.json, auth.json, сырые ответы в Git.
   Сессия OpenCode Console не обновляется: истёкший вход = `auth_required`.

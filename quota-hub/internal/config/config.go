@@ -246,9 +246,9 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 			return s, errors.New("observe_interval requires enabled claude_fallback; passive-only sources use interval")
 		}
 	case "opencode":
-		// The OpenCode Console (pay-as-you-go). The credential is the Console
+		// Paid OpenCode Go. The credential is the Console
 		// credential of the local OpenCode service, never a file of this config.
-		s.Source, s.Product = "opencode_console", "opencode_console"
+		s.Source, s.Product = "opencode_console", "opencode_go"
 		if s.OpenCodeServiceFile == "" {
 			if err := validateOpenCodeURL(s.OpenCodeURL); err != nil {
 				return s, err
@@ -263,15 +263,8 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		if s.IntegrationID != collectors.OpenCodeConsoleIntegration {
 			return s, errors.New("opencode console requires integration_id opencode")
 		}
-		if s.ObservedFile != "" && !filepath.IsAbs(s.ObservedFile) {
-			return s, errors.New("opencode observed_file must be an absolute path")
-		}
-		if entry.ObserveInterval != "" {
-			var err error
-			s.ObserveInterval, err = duration(entry.ObserveInterval, 30*time.Second, 15*time.Second, time.Hour)
-			if err != nil {
-				return s, errors.New("observe_interval must be between 15s and 1h")
-			}
+		if s.ObservedFile != "" || entry.ObserveInterval != "" || entry.ClaudeFallback != nil {
+			return s, errors.New("opencode Go uses only remote usage; remove legacy observed_file/observe_interval/fallback")
 		}
 	default:
 		return s, errors.New("unsupported enabled provider")

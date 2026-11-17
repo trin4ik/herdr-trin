@@ -24,6 +24,29 @@ func valid(t *testing.T) Config {
 	}
 }
 
+func TestOpenCodeGoRemoteOnlyMigration(t *testing.T) {
+	c := valid(t)
+	c.Subscriptions = []Subscription{{ID: "opencode-go", Provider: "opencode", Enabled: true}}
+	ss, err := c.Specs()
+	if err != nil || len(ss) != 1 {
+		t.Fatalf("Go spec: %+v %v", ss, err)
+	}
+	if ss[0].Product != "opencode_go" || ss[0].Source != "opencode_console" || ss[0].IntegrationID != "opencode" || ss[0].Interval != 5*time.Minute {
+		t.Fatalf("incorrect Go defaults: %+v", ss[0])
+	}
+	for _, legacy := range []Subscription{
+		{ObservedFile: "/legacy/opencode.latest.json"},
+		{ObserveInterval: "30s"},
+		{ClaudeFallback: &ClaudeFallback{}},
+	} {
+		legacy.ID, legacy.Provider, legacy.Enabled = "go", "opencode", true
+		c.Subscriptions = []Subscription{legacy}
+		if _, err := c.Specs(); err == nil {
+			t.Fatal("accepted legacy Go observation config")
+		}
+	}
+}
+
 func TestSpecsSeparateProvidersFromCredentialSources(t *testing.T) {
 	c := valid(t)
 	ss, err := c.Specs()

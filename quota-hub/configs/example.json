@@ -10,9 +10,8 @@
     { "id": "ollama-primary", "provider": "ollama", "enabled": false, "integration_id": "ollama-cloud" },
     { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" },
     {
-      "id": "opencode-console", "provider": "opencode", "enabled": false, "integration_id": "opencode",
-      "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/opencode.latest.json",
-      "interval": "5m", "observe_interval": "30s"
+      "id": "opencode-go", "provider": "opencode", "enabled": false, "integration_id": "opencode",
+      "interval": "5m"
     },
     {
       "id": "claude-primary", "provider": "claude", "enabled": false,

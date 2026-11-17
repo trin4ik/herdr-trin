@@ -91,15 +91,11 @@ func New(spec Spec, opts Options) (Collector, error) {
 		if err != nil {
 			return nil, err
 		}
-		server, err := endpoint("console", EndpointConsole)
-		if err != nil {
-			return nil, err
-		}
 		goUsage, err := endpoint("console_go", EndpointConsoleGo)
 		if err != nil {
 			return nil, err
 		}
-		return &openCodeConsoleCollector{base: b, oc: oc, server: server, goUsage: goUsage}, nil
+		return &openCodeConsoleCollector{base: b, oc: oc, goUsage: goUsage}, nil
 	}
 	return nil, fail(CodeConfigInvalid)
 }

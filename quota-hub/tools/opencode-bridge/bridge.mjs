@@ -1,19 +1,16 @@
 // Persistent quota bridge: OpenCode http.response -> latest sanitized observation files.
 // Passive by design: the Claude half reads only model.providerID, request.url
 // (filter, never stored), response.status and the names/values of the Anthropic
-// subscription-window headers. The free-limit half reads only the refusal of a free
-// model: the status and the Retry-After of a 429.
+// subscription-window headers. OpenCode Go is read directly by quota-hub.
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import { buildObservation, matchEndpoint, SCHEMA_VERSION } from "./headers.mjs"
-import { buildFreeLimitObservation, FREE_LIMIT_PROVIDER_ID } from "./free-limit.mjs"
 
 export const PLUGIN_ID = "quota-hub.claude-bridge"
 export const PROVIDER_ID = "anthropic"
 export const SOURCE = "opencode-http-response-hook"
 export const DEFAULT_OUTPUT_FILE = join(homedir(), ".local", "state", "quota-hub", "bridge", "claude.latest.json")
-export const DEFAULT_FREE_LIMIT_FILE = join(homedir(), ".local", "state", "quota-hub", "bridge", "opencode.latest.json")
 export const REGISTRY_KEY = Symbol.for("quota-hub.claude-bridge.registry.v1")
 
 const MAX_HEADER_NAMES_SCANNED = 256
@@ -42,12 +39,11 @@ function resolvePath(given, fallback) {
 export function resolveConfig(options) {
   const source = options !== null && typeof options === "object" ? options : {}
   const claude = resolvePath(source.outputFile, DEFAULT_OUTPUT_FILE)
-  const free = resolvePath(source.freeLimitFile, DEFAULT_FREE_LIMIT_FILE)
-  if (claude.error !== null || free.error !== null) {
+  if (claude.error !== null) {
     // One unusable path disables the whole plugin: it never writes somewhere else.
-    return { outputFile: null, freeLimitFile: null, error: claude.error ?? free.error }
+    return { outputFile: null, error: claude.error }
   }
-  return { outputFile: claude.path, freeLimitFile: free.path, error: null }
+  return { outputFile: claude.path, error: null }
 }
 
 const acceptableStatus = (status) => (status >= 200 && status <= 299) || status === 429
@@ -273,79 +269,12 @@ export function createBridge({ config, fs = defaultFs, now = Date.now, registry 
 }
 
 /**
- * The free-limit half: it records the refusal of a free model and the moment the
- * daily allowance comes back. Nothing else of the response is read.
- */
-export function createFreeLimitBridge({ config, fs = defaultFs, now = Date.now, registry = getRegistry() } = {}) {
-  const cfg = config ?? resolveConfig()
-  const seen = new WeakSet()
-  const stats = { observed: 0, ignored: 0 }
-  let disposed = false
-  let stream = null
-
-  if (cfg.freeLimitFile !== null) {
-    stream = registry.get(cfg.freeLimitFile)
-    if (!stream) {
-      stream = createStream(cfg.freeLimitFile, fs)
-      registry.set(cfg.freeLimitFile, stream)
-    }
-    stream.refs++
-  }
-
-  /** Passive hook body. Synchronous, returns nothing, never throws. */
-  const handle = (event) => {
-    try {
-      if (disposed || stream === null || event === null || typeof event !== "object") return
-      if (event.model?.providerID !== FREE_LIMIT_PROVIDER_ID) return
-      if (seen.has(event)) return
-      seen.add(event)
-
-      const response = event.response
-      if (response === null || typeof response !== "object") return
-      const observation = buildFreeLimitObservation({
-        url: event.request?.url,
-        status: response.status,
-        headers: response.headers,
-        observedAt: now(),
-        now,
-      })
-      if (observation === null) {
-        stats.ignored++
-        return
-      }
-      stats.observed++
-      stream.submit(observation)
-    } catch {
-      // Observation must never disturb the model call.
-    }
-  }
-
-  let released = false
-  return {
-    handle,
-    config: cfg,
-    stats: () => ({ ...stats, ...(stream?.stats ?? {}), pending: stream !== null && stream.pending !== null ? 1 : 0 }),
-    drain: () => stream?.drain() ?? Promise.resolve(),
-    dispose: async () => {
-      disposed = true
-      if (stream === null) return
-      await stream.drain()
-      if (!released) {
-        released = true
-        if (--stream.refs <= 0 && stream.runner === null && registry.get(stream.path) === stream) registry.delete(stream.path)
-      }
-    },
-  }
-}
-
-/**
  * Plugin body, free of host imports so it can be tested with a fake context. Startup does no
  * I/O at all: it neither reads nor touches the output file.
  */
 export async function setupBridge(ctx, deps = {}) {
   const config = resolveConfig(ctx?.options)
   const bridge = createBridge({ config, ...deps })
-  const freeLimitBridge = createFreeLimitBridge({ config, ...deps })
   const registrations = []
   if (bridge.config.outputFile !== null) {
     try {
@@ -354,16 +283,9 @@ export async function setupBridge(ctx, deps = {}) {
       // A failed registration only means no observations.
     }
   }
-  if (freeLimitBridge.config.freeLimitFile !== null) {
-    try {
-      registrations.push(await ctx.session.hook("http.response", freeLimitBridge.handle, { providerID: FREE_LIMIT_PROVIDER_ID }))
-    } catch {
-      // A failed registration only means no observations.
-    }
-  }
 
   return async () => {
-    const disposing = Promise.all([bridge.dispose(), freeLimitBridge.dispose()])
+    const disposing = bridge.dispose()
     for (const registration of registrations) {
       await Promise.resolve(registration?.dispose?.()).catch(() => {})
     }

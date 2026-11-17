@@ -10,7 +10,7 @@ Headless Go-сборщик → private last-good/history/cooldown → норма
 | Claude | Passive headers + native usage GET; native `.claude/.credentials.json` | Keychain не читается; нативный GET даёт все окна, включая лимит по модели |
 | Ollama | Active key `ollama-cloud` из OpenCode `/api/credential` | Нужен доступ к owning service |
 | Kimi | Active key явно выбранной `kimi-code-plan-cn` или `kimi-code-plan-global` | Не угадывать регион по имени аккаунта |
-| OpenCode Console | Credential `opencode` из OpenCode `/api/credential` → Console API opencode.ai | Сессия Console не обновляется здесь; нужен повторный вход на машине |
+| OpenCode Go | Credential `opencode` из OpenCode `/api/credential` → Go usage opencode.ai | Только платный allowance; сессия не обновляется |
 
 Не PIN/device-code login: сервис использует уже существующий вход и не выполняет
 auth switch/refresh. Нет отдельной поддержки произвольного API-key env для
@@ -75,10 +75,10 @@ Claude account metadata/email требует отдельного account_file (
 файл с project history и не включает account pin. Не путайте unknown profile с
 ошибкой квоты. Подключение профиля — явное локальное решение, не auto-discovery.
 
-## OpenCode Console (pay-as-you-go)
+## OpenCode Go
 
-Подписка `provider: opencode` читает рабочее пространство Console: баланс,
-счётчики по моделям, бюджеты и метры Go (5ч/неделя/месяц). Кред — активная
+Подписка `provider: opencode`, product `opencode_go`, читает только платные
+метры Go (5ч/неделя/месяц), `GET https://opencode.ai/zen/go/v1/usage`. Кред — активная
 интеграция `opencode` локального сервиса OpenCode: session token или
 персональный API-ключ Console. Origin Console зашит в код и никогда не берётся
 из credential, поэтому кред не может перенаправить запрос квот.
@@ -88,18 +88,23 @@ Claude account metadata/email требует отдельного account_file (
 Сессия Console не обновляется сборщиком (refresh запрещён): при 401 подписка
 сообщает `auth_required` и её нужно переоткрыть входом на этой машине.
 
-Подтверждённого API остатка бесплатных моделей не найдено. Bridge наблюдает
-429 с `Retry-After` (второй файл, `provider_id: opencode`, `rate_limit_reset`),
-но этих метаданных недостаточно для определения причины: возможны free-cap,
-Go, paid или общее throttling. Backend показывает «Отказ провайдера» без
-процентов; legacy `free_limit_reset` читается с той же осторожной семантикой.
-После времени повтора событие исключается, восстановление allowance не
-выдумывается. Публикация события ждёт remote refresh (обычно до 5 минут),
-чтобы не освежать timestamp старого баланса; при outage дольше. После restart
-нужен первый успешный remote snapshot. Модели >100 пока вызывают явную ошибку
-неполного ответа вместо публикации усечённых счётчиков. Ненулевой масштаб
-MicroCents/USD требует независимого подтверждения provider implementation;
-live workspace с нулевыми балансом/стоимостью его не проверяет.
+Сборщик публикует ровно три конечных окна: `go_rolling`, `go_weekly`,
+`go_monthly`; UI показывает 5ч в строке и все окна по клику. Проценты и даты
+берутся из ответа, календарный месяц не подменяется 30 днями. Тариф/профиль
+по лимитам не угадываются. Отсутствие Go (403), невалидный или частичный ответ —
+ошибка, а не нулевой расход; last-good сохраняется с исходной свежестью.
+429 учитывает Retry-After/backoff. SSE/event-контракт Go не подтверждён,
+поэтому usage polling по умолчанию раз в 5 минут, timeout 15с.
+
+Старый free/refusal bridge, счётчики моделей, баланс и бюджеты удалены из этого
+сборщика. При обновлении оставить прежнюю Console-запись выключенной и создать
+новую `id: opencode-go`, `provider: opencode`, без `observed_file`/`observe_interval`.
+Product изменился: прежний ID с сохранённым state не переиспользовать — store
+защищает fingerprint provider/product/source. История Console остаётся на диске,
+новые Go-лимиты не наследуют её free-счётчики. Source `opencode_console` сохранён
+как имя канала получения. Файлы старых наблюдений
+не читаются; bridge продолжает обслуживать только Claude. Авторизация,
+история и настройки остальных подписок не удаляются.
 
 ## Поведение и доступ
 
