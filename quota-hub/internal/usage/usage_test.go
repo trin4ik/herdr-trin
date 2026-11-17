@@ -190,6 +190,42 @@ func TestPrices(t *testing.T) {
 	}
 }
 
+func TestModePrices(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(`{"p":{"models":{
+		"m":{"cost":{"input":1,"output":2,"cache_read":3,"cache_write":4,"tiers":[{"tier":{"type":"context","size":100},"input":5,"output":6}],"context_over_200k":{"input":7,"output":8}},
+		     "experimental":{"modes":{"fast":{"cost":{"input":10,"output":20}},"pro":{},"real":{"cost":{"input":1}},"big":{"cost":{"input":10,"context_over_200k":{"input":70}}}}}},
+		"m-real":{"cost":{"input":100}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := "p"
+	for _, tt := range []struct {
+		model  string
+		tokens Tokens
+		tier   int64
+		want   float64
+	}{
+		{"m-fast", Tokens{Input: 10, Output: 4}, 0, (10*10 + 4*20) / 1e6},                               // mode replaces base
+		{"m-fast", Tokens{Input: 1000, Output: 4}, 100, (1000*5 + 4*6) / 1e6},                           // base tiers stay
+		{"m-fast", Tokens{CacheRead: 5, CacheWrite: 5}, 0, 0},                                           // missing mode rates are 0, as in OpenCode
+		{"m-pro", Tokens{Input: 10, Output: 4, CacheRead: 3, CacheWrite: 2}, 0, (10 + 8 + 9 + 8) / 1e6}, // mode without cost = base price
+		{"m-big", Tokens{Input: 300000}, 200000, 300000 * 70 / 1e6},                                     // mode tier replaces the same-size base tier
+		{"m-real", Tokens{Input: 1}, 0, 100 / 1e6},                                                      // exact id wins
+	} {
+		m := tt.model
+		usd, price := i.price(Event{Provider: &p, Model: &m, Tokens: tt.tokens})
+		if usd == nil || math.Abs(*usd-tt.want) > 1e-12 || price.Tier != tt.tier {
+			t.Fatalf("%+v -> %v %+v", tt, usd, price)
+		}
+	}
+	m := "m-slow"
+	if usd, price := i.price(Event{Provider: &p, Model: &m}); usd != nil || price.Status != "unknown_model" {
+		t.Fatalf("%v %+v", usd, price)
+	}
+}
+
 func TestFetchPrices(t *testing.T) {
 	i := importer(t)
 	i.Offline = false

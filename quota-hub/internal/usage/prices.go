@@ -28,11 +28,80 @@ type cost struct {
 	} `json:"tiers"`
 	Over *rate `json:"context_over_200k"`
 }
-type snapshot map[string]struct {
-	Models map[string]struct {
-		Cost cost `json:"cost"`
-	} `json:"models"`
+type model struct {
+	Cost         cost `json:"cost"`
+	Experimental struct {
+		Modes map[string]struct {
+			Cost *cost `json:"cost"`
+		} `json:"modes"`
+	} `json:"experimental"`
 }
+type snapshot map[string]struct {
+	Models map[string]model `json:"models"`
+}
+type tier struct {
+	size int64
+	rate
+}
+
+// table lists the base rate and context tiers in OpenCode's order; context_over_200k is a 200000 tier.
+func (c cost) table() (rate, []tier) {
+	var tiers []tier
+	for _, t := range c.Tiers {
+		if t.Tier.Type == "context" {
+			tiers = append(tiers, tier{t.Tier.Size, t.rate})
+		}
+	}
+	if c.Over != nil {
+		tiers = append(tiers, tier{200000, *c.Over})
+	}
+	return c.rate, tiers
+}
+
+// modeTable prices "<model>-<mode>" like OpenCode's mergeCost: the mode replaces the base rate,
+// base tiers stay unless the mode sets a tier of the same size.
+func modeTable(base cost, mode *cost) (rate, []tier) {
+	r, tiers := base.table()
+	if mode == nil {
+		return r, tiers
+	}
+	var merged []tier
+	set := func(t tier) {
+		for k := range merged {
+			if merged[k].size == t.size {
+				merged[k] = t
+				return
+			}
+		}
+		merged = append(merged, t)
+	}
+	for _, t := range tiers {
+		set(t)
+	}
+	r, tiers = mode.table()
+	for _, t := range tiers {
+		set(t)
+	}
+	return r, merged
+}
+
+func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
+	models := s[provider].Models
+	if m, ok := models[id]; ok {
+		r, tiers := m.Cost.table()
+		return r, tiers, true
+	}
+	for base, m := range models {
+		for name, mode := range m.Experimental.Modes {
+			if base+"-"+name == id {
+				r, tiers := modeTable(m.Cost, mode.Cost)
+				return r, tiers, true
+			}
+		}
+	}
+	return rate{}, nil, false
+}
+
 type priceIndex struct {
 	Version   string `json:"version"`
 	FetchedAt string `json:"fetchedAt"`
@@ -145,20 +214,16 @@ func (i *Importer) price(e Event) (*float64, Price) {
 		p.Status = "no_prices"
 		return nil, p
 	}
-	m, ok := i.prices[*e.Provider].Models[*e.Model]
+	r, tiers, ok := i.prices.lookup(*e.Provider, *e.Model)
 	if !ok {
 		p.Status = "unknown_model"
 		return nil, p
 	}
-	r := m.Cost.rate
 	context := float64(e.Tokens.Input) + float64(e.Tokens.CacheRead) + float64(e.Tokens.CacheWrite)
-	for _, tier := range m.Cost.Tiers {
-		if tier.Tier.Type == "context" && context > float64(tier.Tier.Size) && tier.Tier.Size > p.Tier {
-			r, p.Tier = tier.rate, tier.Tier.Size
+	for _, t := range tiers {
+		if context > float64(t.size) && t.size > p.Tier {
+			r, p.Tier = t.rate, t.size
 		}
-	}
-	if m.Cost.Over != nil && context > 200000 && p.Tier < 200000 {
-		r, p.Tier = *m.Cost.Over, 200000
 	}
 	t := e.Tokens
 	usd := (float64(t.Input)*r.Input + (float64(t.Output)+float64(t.Reasoning))*r.Output + float64(t.CacheRead)*r.Read + float64(t.CacheWrite)*r.Write) / 1e6
