@@ -40,6 +40,9 @@ type Summary struct {
 	LastCycle   Counts            `json:"lastCycle"`
 	LastEventAt *string           `json:"lastEventAt"`
 	Windows     map[string]Report `json:"windows"`
+	Quotas      *QuotaSummary     `json:"quotas,omitempty"`
+	Current     []CurrentWindow   `json:"current"`
+	Unmatched   *Report           `json:"unmatched"`
 }
 
 func (t *Totals) add(r Record) {
@@ -56,6 +59,10 @@ func (t *Totals) add(r Record) {
 	t.Tokens.CacheWrite += r.Tokens.CacheWrite
 }
 func ReadReport(dir string, from, to time.Time) (Report, error) {
+	return readReport(dir, from, to, nil)
+}
+
+func readReport(dir string, from, to time.Time, match func(Record) bool) (Report, error) {
 	r := Report{From: from.UTC().Format(time.RFC3339Nano), To: to.UTC().Format(time.RFC3339Nano), ByModel: []ModelTotal{}}
 	models := make(map[string]*ModelTotal)
 	files, err := filepath.Glob(filepath.Join(dir, "ledger", "*.jsonl"))
@@ -74,6 +81,9 @@ func ReadReport(dir string, from, to time.Time) (Report, error) {
 			}
 			at := time.UnixMilli(row.Time)
 			if at.Before(from) || !at.Before(to) {
+				return nil
+			}
+			if match != nil && !match(row) {
 				return nil
 			}
 			key, _ := json.Marshal([]*string{row.Provider, row.Model})

@@ -309,6 +309,7 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 	if !identifier.MatchString(s.Scope) {
 		return s, errors.New("scope must be a safe identifier, not an account token")
 	}
+	s.OpenCodeProvider = s.UsageProvider()
 	return s, nil
 }
 

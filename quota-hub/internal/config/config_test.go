@@ -57,7 +57,11 @@ func TestSpecsSeparateProvidersFromCredentialSources(t *testing.T) {
 		t.Fatalf("disabled provider leaked: %d", len(ss))
 	}
 	wantSources := []string{"native_codex_oauth", "opencode_key", "opencode_key", "opencode_observed"}
+	wantUsage := []string{"openai", "ollama-cloud", "kimi-code-plan-cn", "anthropic"}
 	for i, s := range ss {
+		if s.OpenCodeProvider == nil || *s.OpenCodeProvider != wantUsage[i] {
+			t.Fatalf("bad usage provider: %+v", s.Definition)
+		}
 		if s.Source != wantSources[i] || s.Timeout != 15*time.Second {
 			t.Fatalf("bad source/default: %+v", s.Definition)
 		}

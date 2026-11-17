@@ -15,6 +15,8 @@ type Snapshot struct {
 }
 
 type Subscription struct {
+	OpenCodeProvider *string `json:"opencode_provider"`
+
 	ID            string     `json:"id"`
 	Provider      string     `json:"provider"`
 	Product       string     `json:"product"`
@@ -36,6 +38,7 @@ type Subscription struct {
 }
 
 type Quota struct {
+	Model            *string  `json:"model,omitempty"`
 	ID               string   `json:"id"`
 	Scope            *string  `json:"scope"`
 	Metric           string   `json:"metric"`
@@ -89,6 +92,7 @@ func (e *ErrorInfo) Error() string { return e.Code }
 
 // Definition is non-secret public identity plus freshness policy.
 type Definition struct {
+	OpenCodeProvider    *string
 	ID                  string
 	Provider            string
 	Product             string

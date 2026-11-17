@@ -44,6 +44,12 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
 - Subscription: непустой уникальный string id, string provider, quotas array/null.
   Provider aliases: `codex`/`openai`, `claude`/`anthropic`, `ollama`, `kimi`, `opencode`.
   Неизвестные provider отображаются с fallback-именем/иконкой.
+- `subscription.opencode_provider` — optional/null id провайдера OpenCode,
+  вызовы которого расходуют подписку (`openai`, `anthropic`, integration_id ключа,
+  `opencode`). Это не поле `provider` с названием подписки; UI может его игнорировать.
+- `quota.model` — optional id модели провайдера (иначе DisplayName) для Claude
+  `weekly_scoped`; ограничивает окно одной моделью. Не заменяет `scope`;
+  UI может игнорировать поле. Старые файлы без обоих полей читаются как прежде.
 - `plan`, `account_email`, `source` optional/null. Email только явное поле, без
   control characters, trim и ≤300 символов в UI; не выводится из ID/source.
   Backend по умолчанию email не публикует. Тариф не вычисляется из лимитов.

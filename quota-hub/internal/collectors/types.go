@@ -73,3 +73,22 @@ type Options struct {
 	Endpoints  map[string]string
 	Now        func() time.Time
 }
+
+// UsageProvider identifies the OpenCode calls that consume this subscription.
+func (s Spec) UsageProvider() *string {
+	var provider string
+	switch {
+	case s.Provider == ProviderCodex && s.Source == SourceNativeCodexOAuth:
+		provider = "openai"
+	case s.Provider == ProviderClaude:
+		provider = "anthropic"
+	case s.Source == SourceOpenCodeKey:
+		provider = s.IntegrationID
+	case s.Provider == ProviderOpenCode && s.Source == SourceOpenCodeConsole:
+		provider = "opencode"
+	}
+	if provider == "" {
+		return nil
+	}
+	return &provider
+}

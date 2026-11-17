@@ -339,6 +339,12 @@ func parseClaudeLimits(top map[string]json.RawMessage, observed time.Time) ([]mo
 			}
 		}
 		q := percentQuota(id, scope, used, w)
+		if strings.EqualFold(strings.TrimSpace(entry.Kind), "weekly_scoped") {
+			_, id := claudeScopedModel(entry)
+			if id != "" {
+				q.Model = sptr(id)
+			}
+		}
 		// No provider label here: the derived window label already names the
 		// length of the window and the scope of a pool.
 		q.ObservedAt = tptr(observed)
@@ -401,7 +407,10 @@ func claudeScopedModel(entry claudeLimitEntry) (string, string) {
 		return "", ""
 	}
 	if entry.Scope.Model.ID != nil && strings.TrimSpace(*entry.Scope.Model.ID) != "" {
-		name := *entry.Scope.Model.DisplayName
+		name := ""
+		if entry.Scope.Model.DisplayName != nil {
+			name = *entry.Scope.Model.DisplayName
+		}
 		if strings.TrimSpace(name) == "" {
 			name = *entry.Scope.Model.ID
 		}

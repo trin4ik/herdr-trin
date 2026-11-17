@@ -18,6 +18,8 @@ func run() error {
 	once := flag.Bool("once", false, "import once")
 	summary := flag.Bool("summary", false, "print saved summary")
 	report := flag.Bool("report", false, "report ledger window")
+	windows := flag.Bool("windows", false, "report recorded quota windows without importing")
+	quotasURL := flag.String("quotas-url", "", "optional quota-hub snapshot URL (no authorization)")
 	from := flag.String("from", "", "RFC3339 inclusive start")
 	to := flag.String("to", "", "RFC3339 exclusive end")
 	offline := flag.Bool("offline", false, "use saved prices")
@@ -50,6 +52,13 @@ func run() error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
+	if *windows {
+		r, err := usage.ReadWindows(*dir)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(r)
+	}
 	if *interval <= 0 {
 		return fmt.Errorf("-interval must be positive")
 	}
@@ -59,6 +68,7 @@ func run() error {
 	}
 	defer i.Close()
 	i.ModelsURL, i.Offline = *url, *offline
+	i.QuotasURL = *quotasURL
 	if *once {
 		s, cycleErr := i.Cycle()
 		if err := json.NewEncoder(os.Stdout).Encode(s); err != nil {

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	quotaModel "quota-hub/internal/model"
 )
 
 type Record struct {
@@ -18,10 +20,13 @@ type Record struct {
 	ImportedAt string   `json:"importedAt"`
 }
 type state struct {
-	Offsets        map[string]int64 `json:"offsets"`
-	ETag           string           `json:"etag"`
-	PriceCheckedAt string           `json:"priceCheckedAt"`
-	PriceError     *string          `json:"priceError"`
+	QuotaWindows   map[string]QuotaWindow `json:"quotaWindows,omitempty"`
+	QuotaSnapshot  *quotaModel.Snapshot   `json:"quotaSnapshot,omitempty"`
+	QuotaURL       string                 `json:"quotaURL,omitempty"`
+	Offsets        map[string]int64       `json:"offsets"`
+	ETag           string                 `json:"etag"`
+	PriceCheckedAt string                 `json:"priceCheckedAt"`
+	PriceError     *string                `json:"priceError"`
 }
 type Counts struct {
 	Lines      int `json:"lines"`
@@ -31,6 +36,7 @@ type Counts struct {
 	Warnings   int `json:"warnings"`
 }
 type Importer struct {
+	QuotasURL string
 	Dir       string
 	ModelsURL string
 	Offline   bool
@@ -244,6 +250,11 @@ func (i *Importer) Cycle() (summary Summary, err error) {
 	}
 	for d, buf := range buffers {
 		if err = appendLedger(filepath.Join(i.Dir, "ledger", d+".jsonl"), buf.Bytes()); err != nil {
+			return
+		}
+	}
+	if i.QuotasURL != "" {
+		if err = i.updateQuotas(&s, &summary, now); err != nil {
 			return
 		}
 	}

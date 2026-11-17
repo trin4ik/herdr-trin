@@ -79,6 +79,7 @@ type good struct {
 }
 
 type historyRecord struct {
+	OpenCodeProvider *string `json:"opencode_provider"`
 	ID         string         `json:"id"`
 	SubID      string         `json:"subscription_id"`
 	Provider   string         `json:"provider"`
@@ -316,6 +317,7 @@ func (s *Store) Snapshot(now time.Time) model.Snapshot {
 func view(e *entry, now time.Time) model.Subscription {
 	st := e.st
 	sub := model.Subscription{
+		OpenCodeProvider: cloneStr(e.def.OpenCodeProvider),
 		ID:            e.def.ID,
 		Provider:      e.def.Provider,
 		Product:       e.def.Product,
@@ -474,6 +476,7 @@ func (s *Store) Commit(u model.Update) error {
 			att.Outcome = "ok"
 			if old.Good == nil || old.Good.Key != g.Key {
 				ns.PendingHistory = append(ns.PendingHistory, historyRecord{
+					OpenCodeProvider: cloneStr(e.def.OpenCodeProvider),
 					ID: recordID(u.ID, ns.Seq, g.Key), SubID: u.ID, Seq: ns.Seq,
 					Provider: e.def.Provider, Product: e.def.Product, Source: actual,
 					RecordedAt: at, ObservedAt: g.ObservedAt, Plan: g.Plan,
@@ -954,7 +957,7 @@ func cloneQuotas(in []model.Quota) []model.Quota {
 	out := make([]model.Quota, len(in))
 	for i, q := range in {
 		out[i] = model.Quota{
-			ID: q.ID, Scope: cloneStr(q.Scope), Metric: q.Metric, Unit: q.Unit,
+			ID: q.ID, Scope: cloneStr(q.Scope), Model: cloneStr(q.Model), Metric: q.Metric, Unit: q.Unit,
 			Used: cloneF(q.Used), Limit: cloneF(q.Limit), Remaining: cloneF(q.Remaining),
 			UsedPercent: cloneF(q.UsedPercent), RemainingPercent: cloneF(q.RemainingPercent),
 			Authority: q.Authority,
