@@ -11,6 +11,9 @@ const [start, end, failed, title, compaction, generate] = fixture.events
 const tokens = { input: 10, output: 4, reasoning: 2, cacheRead: 3, cacheWrite: 2 }
 const event = (id, time = 1010) => ({ ...end, id, created: time })
 
+// Instances share process state on purpose; each test starts with a fresh process view.
+test.beforeEach(() => { delete globalThis[Symbol.for("quota-hub.usage-bridge.v1")] })
+
 async function temporary(t) {
   const dir = await fs.mkdtemp(join(os.tmpdir(), "usage-bridge-test-"))
   t.after(() => fs.rm(dir, { recursive: true, force: true }))
@@ -176,12 +179,30 @@ test("two independent instances append 500 events each; modes, filtering and UTC
   const lines = await readLines(dir)
   assert.equal(lines.length, 1000)
   assert.equal(new Set(lines.map((l) => l.id)).size, 1000)
-  assert.equal(lines.find((l) => l.id === "a-0").model, "offline-model")
+  // One start for one message: whichever instance claims the first end takes it.
+  assert.equal(lines.filter((l) => l.model === "offline-model").length, 1)
   assert.equal(a.subscription.signal.aborted, true)
   assert.equal(b.subscription.signal.aborted, true)
   assert.deepEqual((await fs.readdir(dir)).sort(), ["1970-01-01.jsonl", "2026-11-18.jsonl"])
   assert.equal((await fs.stat(dir)).mode & 0o777, 0o700)
   assert.equal((await fs.stat(join(dir, "1970-01-01.jsonl"))).mode & 0o777, 0o600)
+})
+
+test("instances receiving the same events write each event once, with the model", async (t) => {
+  const dir = join(await temporary(t), "events")
+  const sources = Array.from({ length: 3 }, () => channel())
+  const cleanups = await Promise.all(sources.map((s) => setupBridge({ options: { directory: dir }, event: s.event })))
+  t.after(() => Promise.all(cleanups.map((c) => c())))
+  const all = [start, ...Array.from({ length: 300 }, (_, i) => event(`same-${i}`)), title]
+  for (const e of all) for (const s of sources) s.push(e)
+  await until(async () => {
+    try { return (await readLines(dir)).length === 301 } catch { return false }
+  })
+  await Promise.all(cleanups.map((c) => c()))
+  const lines = await readLines(dir)
+  assert.equal(lines.length, 301)
+  assert.equal(new Set(lines.map((l) => l.id)).size, 301)
+  assert.equal(lines.find((l) => l.id === "same-0").model, "offline-model")
 })
 
 test("cleanup never awaits a stuck next() or return()", async (t) => {

@@ -51,9 +51,21 @@ export function toLine(event, starts) {
   }
 }
 
+// Every location instance in one OpenCode process receives every event. Instances
+// and versions share only which events were already taken, so each is written once.
+const shared = () => globalThis[Symbol.for("quota-hub.usage-bridge.v1")] ??= { seen: new Map(), starts: new Map() }
+
+function claim(seen, event) {
+  if (event?.type === "session.step.started" || !types.includes(event?.type) || typeof event.id !== "string") return true
+  if (seen.has(event.id)) return false
+  seen.set(event.id, true)
+  if (seen.size > 10000) seen.delete(seen.keys().next().value)
+  return true
+}
+
 export async function setupBridge(ctx) {
   const controller = new AbortController()
-  const starts = new Map()
+  const { seen, starts } = shared()
   let chain = Promise.resolve(), iterator, ready = false, lastError = -Infinity
   let stop
   const stopped = new Promise((resolve) => { stop = resolve })
@@ -75,6 +87,7 @@ export async function setupBridge(ctx) {
       while (!controller.signal.aborted) {
         const next = await Promise.race([iterator.next(), stopped])
         if (!next || next.done || controller.signal.aborted) break
+        if (!claim(seen, next.value)) continue
         const line = toLine(next.value, starts)
         if (!line) continue
         chain = chain.then(async () => {
@@ -103,7 +116,6 @@ export async function setupBridge(ctx) {
         ])
       } finally {
         clearTimeout(timer)
-        starts.clear()
       }
     } catch { report() }
   }
