@@ -106,6 +106,32 @@ Product изменился: прежний ID с сохранённым state н
 не читаются; bridge продолжает обслуживать только Claude. Авторизация,
 история и настройки остальных подписок не удаляются.
 
+## Учёт токенов OpenCode
+
+Две части, общий каталог `~/.local/state/quota-usage/` (или `$XDG_STATE_HOME/quota-usage`):
+
+1. Плагин [tools/opencode-usage-bridge](tools/opencode-usage-bridge/README.md) на каждый
+   шаг модели дописывает строку в `events/ГГГГ-ММ-ДД.jsonl`: сессия, модель, токены.
+2. `quota-usage` раз в 5 минут дочитывает новые строки, убирает дубли по id события,
+   считает API-эквивалент в USD по models.dev и дописывает `ledger/ГГГГ-ММ-ДД.jsonl`.
+
+Цена фиксируется в момент импорта и не пересчитывается; версия снимка models.dev
+сохраняется в каждой записи (`prices/`, проверка через ETag). Формула и тиры по
+контексту — как у самого OpenCode. `quota-usage -summary` показывает последнюю сводку
+(окна 5ч и 24ч), `-report -from … -to …` — сумму за произвольный период.
+
+Не известны: аккаунт конкретного вызова (OpenCode его не отдаёт) и модель вспомогательных
+вызовов (title/compaction) — такие записи остаются без цены, а не с нулём.
+Плагин пишет без fsync: при падении ОС могут потеряться последние секунды.
+
+```sh
+go build -o quota-usage ./cmd/quota-usage
+./quota-usage            # сервис: цикл каждые 5 минут
+./quota-usage -once      # один цикл, сводка в stdout
+```
+
+Локальная выкладка и откат — [RELEASING.md](RELEASING.md).
+
 ## Поведение и доступ
 
 Provider polling по умолчанию 5м с jitter. Claude читает passive file каждые 30с и
@@ -170,6 +196,7 @@ go test -race ./...
 go vet ./...
 go run ./cmd/quota-hub -config configs/docker.json -check-config
 node --test tools/opencode-bridge/test/*.test.mjs
+node --test tools/opencode-usage-bridge/test/*.test.mjs
 python3 -m unittest discover -s scripts -p 'test_deploy.py'
 ```
 

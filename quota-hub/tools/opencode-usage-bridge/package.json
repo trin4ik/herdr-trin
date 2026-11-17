@@ -1,0 +1,7 @@
+{
+  "name": "quota-hub-opencode-usage-bridge",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./server.ts" },
+  "scripts": { "test": "node --test \"test/*.test.mjs\"" }
+}
