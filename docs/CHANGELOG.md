@@ -1,5 +1,15 @@
 # Публичный журнал
 
+## 2026-11-18 — восстановлены горячие клавиши создания сессий
+
+- `trin-projects/main.js` и `layout/trin/keys.json`: ⌘T запускает
+  `opencode --auto`, ⇧⌘T — обычную оболочку в корне выбранного проекта.
+  Явный выбор другого агента сохранён; остальные изменения WIP не перенесены.
+- README и regression tests обновлены: оба действия, local/remote, empty/live.
+- Проверено: 210 JS-тестов, native check Projects, privacy gate (192 файла),
+  независимый Gitleaks checkout/history и diff-check. Live-применение и
+  физические нажатия сочетаний ещё не проверены.
+
 ## 2026-11-18 — пятая строка подписок и OpenCode Go
 
 - `layout/trin/layouts/trin.json`: блок квот 180px вместо 152px, чтобы пять

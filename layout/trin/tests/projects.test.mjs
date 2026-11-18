@@ -97,14 +97,14 @@ test("launch arguments enforce an explicit root/machine, even for home/global pr
 test("new tabs in existing spaces always pass project root, not live folder", async () => {
   const f = fixture(); await f.panel.newTab();
   const call = f.calls.find(c => c.name === "tab.new");
-  assert.deepEqual(plain(call.args), { space: "s-a", folder: "/projects/a" });
+  assert.deepEqual(plain(call.args), { argv: ["opencode", "--auto"], space: "s-a", folder: "/projects/a" });
   assert.equal(f.calls.filter(c => c.exec).length, 0);
 });
 test("an empty project launches once through acknowledged CLI IDs without a dummy tab", async () => {
   const f = fixture(state(), []); await f.panel.newTab();
   const args = f.calls.find(c => c.exec).exec;
   assert.equal(args[1], "space.new");
-  assert.deepEqual(JSON.parse(args[2]), { name: "Project a", folder: "/projects/a", machine: "" });
+  assert.deepEqual(JSON.parse(args[2]), { name: "Project a", folder: "/projects/a", machine: "", argv: ["opencode", "--auto"] });
   assert.equal(f.saved.projects[0].space, "created");
   assert.equal(f.saved.projects.length, 1);
 });
@@ -112,6 +112,26 @@ test("first agent session keeps the project name and passes a separate initial t
   const f = fixture(state(), []); await f.panel.newTab("a", { name: "Agent", argv: ["agent"] });
   const args = JSON.parse(f.calls.find(c => c.exec).exec[2]);
   assert.equal(args.name, "Project a"); assert.equal(args.tab, "Agent"); assert.deepEqual(args.argv, ["agent"]);
+});
+test("session shortcuts launch OpenCode or a plain shell in local/remote and empty/live projects", async () => {
+  const keys = JSON.parse(fs.readFileSync(new URL("../keys.json", import.meta.url), "utf8"))["layout:trin"];
+  assert.equal(keys["cmd-t"], "trin-projects.new-tab");
+  assert.equal(keys["cmd-shift-t"], "trin-projects.new-terminal");
+  for (const machine of [null, "remote"]) for (const empty of [false, true]) for (const key of ["cmd-t", "cmd-shift-t"]) {
+    const project = p("a", machine), space = s("a", machine);
+    const f = fixture(state([project]), empty ? [] : [space]);
+    f.setMachines([{ name: machine, layout: "ready" }]);
+    f.context.knownAgents = async () => { throw new Error("default launches must not discover agents"); };
+    const jobs = [], context = { ...cx, spawn: fn => { jobs.push(fn(context)); } };
+    await f.panel.act(keys[key].replace("trin-projects.", ""), context);
+    await Promise.all(jobs);
+    const args = empty ? JSON.parse(f.calls.find(c => c.exec).exec[2]) : plain(f.calls.find(c => c.name === "tab.new").args);
+    assert.equal(args.folder, project.folder);
+    if (empty) assert.equal(args.machine, machine ?? "");
+    else assert.equal(args.space, space.id);
+    if (key === "cmd-t") assert.deepEqual(args.argv, ["opencode", "--auto"]);
+    else assert.equal("argv" in args, false);
+  }
 });
 test("launch failure preserves project, binding and explicit error; no silent retry", async () => {
   const f = fixture(state(), []);

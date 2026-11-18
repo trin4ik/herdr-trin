@@ -89,7 +89,7 @@ export default class Projects extends View {
     this.syncWorkspace(read());
   }
 
-  async newTab(id, extra = {}) {
+  async newTab(id, extra = { argv: ["opencode", "--auto"] }) {
     if (this.closed) return;
     let state = read();
     const p = state.projects.find(p => p.id === (id ?? state.selected));
@@ -142,8 +142,8 @@ export default class Projects extends View {
     this.jobBusy = true;
     cx.spawn(async cx => {
       try {
-        let extra = {};
-        if (agentKey) {
+        let extra = agentKey === "shell" ? {} : { argv: ["opencode", "--auto"] };
+        if (agentKey && agentKey !== "shell") {
           if (!machineReady(p, machines())) throw new Error("Машина недоступна.");
           const list = await knownAgents({ on: p.machine });
           if (this.closed || read().selected !== intended) return;
@@ -167,6 +167,7 @@ export default class Projects extends View {
     const state = this.sync(cx);
     if (action === "select") this.select(id);
     else if (action === "new-tab") this.startLaunch(id, null, cx);
+    else if (action === "new-terminal") this.startLaunch(id, "shell", cx);
     else if (action === "new") overlay("form");
     else if (action === "browse") {
       const machine = id ?? selectedProject(state)?.machine;
