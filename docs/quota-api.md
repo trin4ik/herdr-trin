@@ -86,7 +86,7 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   месяц не подменяется 30 днями. `scope: code|total` создаёт отдельные подписи.
 - Несколько окон/пулов не объединяются. Codex primary — weekly, затем 5ч/session/
   первое окно; остальные — 5ч/session/первое. Для `opencode` primary —
-  Go weekly/monthly/rolling, затем первое окно; отказ остаётся событием без
+  Go rolling (5ч)/weekly/monthly, затем первое окно; отказ остаётся событием без
   процента, строка без измеренного allowance показывает баланс. Проценты в строке округлены,
   в деталях сохраняется точность; абсолютные даты показываются UTC+3.
 - `metrics[]` с `metric: balance`, id, numeric value, unit — баланс отдельно

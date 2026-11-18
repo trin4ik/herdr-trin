@@ -6,7 +6,7 @@ const PROVIDERS = {
   anthropic: { provider: "anthropic", name: "Claude", order: 1 },
   ollama: { provider: "ollama", name: "Ollama", order: 2 },
   kimi: { provider: "kimi", name: "Kimi", order: 3 },
-  opencode: { provider: "opencode", name: "OpenCode Console", order: 4 },
+  opencode: { provider: "opencode", name: "OpenCode Go", order: 4 },
 };
 const validPercent = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
 const validAmount = value => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -94,12 +94,12 @@ export function normalizeSnapshot(payload) {
     const identity = PROVIDERS[s.provider] ?? { provider: s.provider, name: s.provider, order: 5 };
     const windows = (s.quotas ?? []).map(normalizeQuota);
     if (new Set(windows.map(w => w.id)).size !== windows.length) throw new Error("Повторяющиеся окна лимитов");
-    // Only measured allowances belong in the Console percentage row. An observed
-    // refusal has no published capacity and stays in the details without a bar.
+    // Prefer the five-hour Go allowance. Legacy counters remain available in
+    // details without being mistaken for measured percentage windows.
     let primary = null;
     if (identity.provider === "opencode") {
-      primary = windows.find(w => w.id === "go_weekly")
-        ?? windows.find(w => w.id === "go_monthly") ?? windows.find(w => w.id === "go_rolling") ?? null;
+      primary = windows.find(w => w.id === "go_rolling")
+        ?? windows.find(w => w.id === "go_weekly") ?? windows.find(w => w.id === "go_monthly") ?? null;
     } else if (identity.provider === "openai") {
       primary = windows.find(w => w.period === "week" || w.durationSeconds === 604800) ?? null;
     }

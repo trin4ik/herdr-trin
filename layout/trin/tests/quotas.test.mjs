@@ -545,12 +545,43 @@ test("API-price row adds exactly 20px to bar details, uses dim for stale, never 
 });
 const consoleFixture = await import("./fixtures/quota-console.js");
 
+test("five subscriptions retain Go last, five-hour primary and API usage in a scrollable list", () => {
+  const go = { id: "opencode-go", provider: "opencode", status: "ok", quotas: [
+    { id: "go_weekly", used_percent: 43, window: { period: "week" } },
+    { id: "go_monthly", used_percent: 21, window: { period: "month" } },
+    { id: "go_rolling", used_percent: 7, window: { duration_seconds: 18000 }, usage: rawUsage },
+  ] };
+  const normalized = data.normalizeSnapshot({ schema_version: 1, generated_at: rawUsage.generated_at,
+    subscriptions: [go, ...["kimi", "ollama", "claude", "codex"].map(provider => ({ id: provider, provider, quotas: [] }))] });
+  assert.deepEqual(normalized.subscriptions.map(s => s.provider), ["openai", "anthropic", "ollama", "kimi", "opencode"]);
+  const subscription = normalized.subscriptions.at(-1);
+  assert.equal(subscription.name, "OpenCode Go");
+  assert.equal(subscription.primaryWindowId, "go_rolling");
+  assert.equal(metrics.usage(metrics.primaryWindow(subscription)), 7);
+  assert.equal(subscription.windows.at(-1).usage.costUSD, 48.15);
+  for (const width of [268, 44]) {
+    const { panel } = fixture(width);
+    panel.monitor.subscriptions = normalized.subscriptions;
+    const root = panel.render();
+    const list = nodes(root).find(el => el.attrs.overflow_y_scrollbar);
+    assert.ok(list, "scrolling remains available when the viewport cannot fit every row");
+    assert.equal(list.childNodes.length, 5);
+    assert.equal(text(byID(root, "quota-opencode-go-usage")), "7%");
+    if (width === 268) {
+      const layout = JSON.parse(fs.readFileSync(new URL("../layouts/trin.json", import.meta.url), "utf8"));
+      const find = node => node.id === "quotas" ? node : (node.children ?? []).map(find).find(Boolean);
+      const rowsHeight = normalized.subscriptions.reduce((sum, s) => sum + byID(root, `quota-${s.id}`).attrs.h[0], 0);
+      assert.ok(find(layout).size.px >= 28 + rowsHeight + 8 + 1, "wide block fits header, all five rows, padding and border");
+    }
+  }
+});
+
 test("the console snapshot keeps counters and a percentage-free refusal", () => {
   const normalized = data.normalizeSnapshot(consoleFixture.consolePayload);
   assert.equal(normalized.subscriptions.length, 1);
   const s = normalized.subscriptions[0];
   assert.equal(s.provider, "opencode");
-  assert.equal(s.name, "OpenCode Console");
+  assert.equal(s.name, "OpenCode Go");
   assert.equal(s.primaryWindowId, "go_weekly");
   const free = s.windows.find(w => w.id === "provider_refusal");
   assert.equal(free.metric, "counter");
