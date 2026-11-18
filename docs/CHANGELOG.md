@@ -13,6 +13,13 @@
 - Проходят 218 JS-тестов, native checks Tabs/Projects и обе eager drag fixtures
   (влево/вправо), detector и diff-check. Privacy gate и независимый redacted scan
   выполняются перед публикацией. Live-применение ещё не проверено.
+- Privacy gate192 и Gitleaks checkout/history прошли. После публикации штатный
+  update-layout применил изменения. Снимок лично просмотрен: чистые заголовки,
+  OpenCode/⌘T и shell/⇧⌘T справа на месте. Status без ошибок, *.error нет.
+- Live: две shell-вкладки и OpenCode --auto из активной первой добавлены строго
+  в конец с сохранением остального порядка и project cwd. Prompts не отправлены,
+  собственные вкладки закрыты, исходный проект восстановлен. Physical drag/clicks,
+  light/narrow и remote/empty вживую не проверены; GUI tool runtime недоступен.
 
 ## 2026-11-18 — восстановлены горячие клавиши создания сессий
 
