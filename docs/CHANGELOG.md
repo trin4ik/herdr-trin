@@ -14,6 +14,17 @@
 - Проверено: 236 JS, 70 Python, native checks Projects/Agents/Tabs и eager
   drag/drop rows wide/rail, detector. Проверки приватности и live-применение
   выполняются далее; mobile/reconnect/physical clicks/light/narrow пока не проверены.
+- Privacy gate193 и независимый redacted Gitleaks checkout/history чисты.
+  Код опубликован и применён update-layout; main→trin пересоздал runtime без
+  закрытия рабочих сессий. Снимок лично просмотрен; status/errors чисты.
+- Live на собственном временном проекте: native rename исправлен из Projects;
+  last-close создал новый Space с plain shell в прежнем корне, permanent project
+  ID/name/root сохранены. Remove-native удалил тестовый проект/Space; исходный
+  выбор восстановлен, моделей не вызывали. Финал: 8/8, имена/порядок совпадают,
+  pending0, mirror=true. Текущий Dock zero соответствует отсутствию blocked/done.
+- Ненулевой Dock badge не подтверждён в этом прогоне: тестовые OSC-сообщения
+  не дали agent status; probes удалены. Badge/aliases/delete-confirm/drag покрыты
+  offline/native, но physical clicks, mobile, reconnect и light/narrow не проверены.
 
 ## 2026-11-18 — восстановлена полоса вкладок и порядок новых сессий
 
