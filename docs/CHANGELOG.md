@@ -1,5 +1,19 @@
 # Публичный журнал
 
+## 2026-11-18 — восстановлена полоса вкладок и порядок новых сессий
+
+- `trin-tabs/main.js`: возвращены прежние чистые title + close, кнопки OpenCode/⌘T
+  и терминала/⇧⌘T вместо плюса, drag ghost и анимация соседей; ширины заморожены
+  с нажатия против смены заголовка при загрузке. Edge-autoscroll пока отсутствует.
+- `trin-projects/main.js`: новая вкладка перемещается в конец по подтверждённому
+  ID; shell, OpenCode и явный другой агент используют общий путь.
+- README и navigation/projects regression tests актуализированы. Остальные
+  функции WIP, квоты/API-учёт/backend не меняются. `trin-projects/ui.js` сохраняет
+  обычную оболочку при явном выборе «Терминал» в меню.
+- Проходят 218 JS-тестов, native checks Tabs/Projects и обе eager drag fixtures
+  (влево/вправо), detector и diff-check. Privacy gate и независимый redacted scan
+  выполняются перед публикацией. Live-применение ещё не проверено.
+
 ## 2026-11-18 — восстановлены горячие клавиши создания сессий
 
 - `trin-projects/main.js` и `layout/trin/keys.json`: ⌘T запускает

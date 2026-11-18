@@ -98,7 +98,7 @@ export function renderSurface(view, cx) {
   if (!p) return root.child("Проект больше не существует");
   const s = live(p), available = ready(p);
   if (surface === "agents") return root.h_full().child(div().text_size(15).font_semibold().truncate().child(`Новая сессия · ${p.name}`))
-    .child(button("project-shell", "Терминал", () => { closeOverlay(props().overlay); command("new-tab", p.id); }, available))
+    .child(button("project-shell", "Терминал", () => { closeOverlay(props().overlay); command("new-terminal", p.id); }, available))
     .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().gap(6).children((view.agents ?? []).map(a => button(`project-agent-${a.key}`, a.name, () => {
       closeOverlay(props().overlay); command("agent", `${p.id}|${a.key}`);
     }, available))))

@@ -57,11 +57,15 @@ const cx = { stop_propagation() {}, notify() {} };
 const tab = id => ({ id, name: id, active: id === "a" });
 const space = (id, machine = null) => ({ id, name: id, machine });
 
-test("tab drag resolves current IDs and target index after the list changes", () => {
+test("tab drag previews neighbours and commits only on release", () => {
   const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a"), tab("b"), tab("c")] }]);
-  find(f.panel.render(), "tab-a").handlers["on_mouse_down:left"]({ click_count: 1 }, cx);
-  f.setList([{ id: "space", active: true, tabs: [tab("c"), tab("a"), tab("b")] }]);
-  find(f.panel.render(), "tab-b").handlers["on_mouse_up:left"]();
+  find(f.panel.render(), "tab-a").handlers["on_mouse_down:left"]({ click_count: 1, position: { x: 20 }, bounds: { width: 110 } }, cx);
+  f.panel.moveDrag({ position: { x: 150 } }, cx);
+  assert.equal(find(f.panel.render(), "tab-b").attributes.left[0], -110);
+  assert.ok(find(f.panel.render(), "tab-drag-ghost").attributes.shadow_md);
+  assert.equal(f.commands.length, 0);
+  f.panel.moveDrag({ position: { x: 260 } }, cx);
+  f.panel.finishDrag(cx);
   assert.equal(f.commands[0].command, "tab.move");
   assert.equal(f.commands[0].args.id, "a");
   assert.equal(f.commands[0].args.index, 3);
@@ -69,23 +73,88 @@ test("tab drag resolves current IDs and target index after the list changes", ()
 
 test("closing a tab during a drag cancels rather than moving its replacement", () => {
   const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a"), tab("b")] }]);
-  find(f.panel.render(), "tab-a").handlers["on_mouse_down:left"]({ click_count: 1 }, cx);
+  find(f.panel.render(), "tab-a").handlers["on_mouse_down:left"]({ click_count: 1, position: { x: 20 }, bounds: { width: 110 } }, cx);
   f.setList([{ id: "space", active: true, tabs: [tab("b")] }]);
-  find(f.panel.render(), "tab-b").handlers["on_mouse_up:left"]();
+  f.panel.render(); f.panel.finishDrag(cx);
   assert.equal(f.commands.length, 0);
 });
 
-test("square New button uses the same project-root action as Command-T", () => {
+test("OpenCode button uses the same project-root action as Command-T", () => {
   const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a")] }]);
   const root = f.panel.render(), button = find(root, "tab-new");
-  assert.equal(button.attributes.size[0], 18);
-  assert.equal(button.childNodes[0].attributes.size[0], 14);
-  assert.equal(button.attributes.border[0], 1);
+  assert.equal(button.attributes.h[0], 26);
+  assert.equal(button.childNodes[0].attributes.w[0], 8);
+  assert.equal(button.childNodes[0].attributes.h[0], 10);
   assert.equal(find(root, "tab-new-shortcut").childNodes[0], "⌘ T");
   assert.equal(find(root, "tab-new-shortcut").attributes.opacity[0], 0.65);
   button.handlers.on_click();
   assert.equal(f.commands.length, 1);
   assert.equal(f.commands[0].command, "trin-projects.new-tab");
+});
+
+test("terminal button advertises Shift-Command-T outside scrolling tabs", () => {
+  const f = fixture("trin-tabs", []), root = f.panel.render();
+  assert.equal(find(root, "tab-terminal-shortcut").childNodes[0], "⇧ ⌘ T");
+  assert.equal(find(root, "tab-terminal").childNodes[0].attributes.size[0], 12);
+  find(root, "tab-terminal").handlers.on_click();
+  assert.equal(f.commands[0].command, "trin-projects.new-terminal");
+  assert.equal(find(find(root, "tab-scroll"), "tab-terminal"), null);
+});
+
+test("tabs show only title and close even while working or inactive", () => {
+  const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [{ ...tab("a"), status: "working" }, tab("b")] }]);
+  for (const id of ["a", "b"]) {
+    const node = find(f.panel.render(), `tab-${id}`);
+    assert.ok(find(node, `close-${id}`));
+    assert.equal(node.childNodes.length, id === "a" ? 3 : 2);
+  }
+});
+
+test("click selects, double-click renames and leaving cancels drag", () => {
+  const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a"), tab("b")] }]);
+  const down = count => find(f.panel.render(), "tab-a").handlers["on_mouse_down:left"]({ click_count: count, position: { x: 20 }, bounds: { width: 110 } }, cx);
+  down(1); f.panel.finishDrag(cx); assert.equal(f.commands.at(-1).command, "tab.select");
+  down(2); assert.equal(f.commands.at(-1).command, "tab.rename");
+  const count = f.commands.length;
+  down(1); f.panel.moveDrag({ position: { x: 180 } }, cx);
+  f.panel.render().handlers.on_hover(false, cx); f.panel.finishDrag(cx);
+  assert.equal(f.panel.drag, null); assert.equal(f.commands.length, count);
+});
+
+test("reorders, viewport resize and project changes cancel previews", () => {
+  for (const change of ["reorder", "resize", "project"]) {
+    const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a"), tab("b")] }]);
+    let root = f.panel.render(); root.handlers.on_size_change({ width: 900 }, cx);
+    find(root, "tab-a").handlers["on_mouse_down:left"]({ click_count: 1, position: { x: 20 }, bounds: { width: 110 } }, cx);
+    f.panel.moveDrag({ position: { x: 180 } }, cx);
+    if (change === "resize") root.handlers.on_size_change({ width: 600 }, cx);
+    else f.setList([{ id: change === "project" ? "other" : "space", active: true, tabs: [tab("b"), tab("a")] }]);
+    root = f.panel.render(); assert.equal(find(root, "tab-drag-ghost"), null);
+    f.panel.finishDrag(cx); assert.equal(f.commands.length, 0);
+  }
+});
+
+test("loading title changes preserve drag geometry before and after threshold", () => {
+  for (const move of [false, true]) {
+    const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [tab("a"), tab("b")] }]);
+    let root = f.panel.render();
+    for (const id of ["a", "b"]) find(root, `tab-${id}`).handlers.on_size_change({ width: 160 }, cx);
+    find(root, "tab-b").handlers["on_mouse_down:left"]({ click_count: 1, position: { x: 190 }, bounds: { width: 160 } }, cx);
+    if (move) f.panel.moveDrag({ position: { x: 10 } }, cx);
+    const before = f.panel.drag;
+    f.setList([{ id: "space", active: true, tabs: [{ ...tab("a"), named: true, name: "Long neighbour title" }, { ...tab("b"), named: true, name: "New title after startup" }] }]);
+    root = f.panel.render();
+    for (const id of ["a", "b"]) {
+      assert.equal(find(root, `tab-${id}`).attributes.w[0], 160);
+      find(root, `tab-${id}`).handlers.on_size_change({ width: 240 }, cx);
+      assert.equal(f.panel.widths.get(id), 160);
+    }
+    assert.equal(f.panel.drag, before);
+    if (!move) f.panel.moveDrag({ position: { x: 10 } }, cx);
+    f.panel.finishDrag(cx);
+    assert.equal(f.commands.at(-1).args.id, "b"); assert.equal(f.commands.at(-1).args.index, 1);
+    assert.equal(find(f.panel.render(), "tab-b").attributes.w, undefined);
+  }
 });
 
 test("New and shortcut stay outside the scrollable tab list, including an empty space", () => {

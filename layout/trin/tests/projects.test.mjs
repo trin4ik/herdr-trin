@@ -96,9 +96,10 @@ test("launch arguments enforce an explicit root/machine, even for home/global pr
 });
 test("new tabs in existing spaces always pass project root, not live folder", async () => {
   const f = fixture(); await f.panel.newTab();
-  const call = f.calls.find(c => c.name === "tab.new");
-  assert.deepEqual(plain(call.args), { argv: ["opencode", "--auto"], space: "s-a", folder: "/projects/a" });
-  assert.equal(f.calls.filter(c => c.exec).length, 0);
+  const call = f.calls.find(c => c.exec?.[1] === "tab.new");
+  assert.deepEqual(JSON.parse(call.exec[2]), { argv: ["opencode", "--auto"], space: "s-a", folder: "/projects/a" });
+  const move = f.calls.find(c => c.exec?.[1] === "tab.move");
+  assert.deepEqual(JSON.parse(move.exec[2]), { id: "new-tab", index: 2147483647 });
 });
 test("an empty project launches once through acknowledged CLI IDs without a dummy tab", async () => {
   const f = fixture(state(), []); await f.panel.newTab();
@@ -125,7 +126,7 @@ test("session shortcuts launch OpenCode or a plain shell in local/remote and emp
     const jobs = [], context = { ...cx, spawn: fn => { jobs.push(fn(context)); } };
     await f.panel.act(keys[key].replace("trin-projects.", ""), context);
     await Promise.all(jobs);
-    const args = empty ? JSON.parse(f.calls.find(c => c.exec).exec[2]) : plain(f.calls.find(c => c.name === "tab.new").args);
+    const args = JSON.parse(f.calls.find(c => c.exec?.[1] === (empty ? "space.new" : "tab.new")).exec[2]);
     assert.equal(args.folder, project.folder);
     if (empty) assert.equal(args.machine, machine ?? "");
     else assert.equal(args.space, space.id);
@@ -138,6 +139,21 @@ test("launch failure preserves project, binding and explicit error; no silent re
   f.context.exec = async () => ({ code: 1, stdout: '{"error":"folder missing"}' });
   await assert.rejects(f.panel.newTab(), /folder missing/);
   assert.equal(f.saved.projects[0].space, "s-a"); assert.equal(f.panel.launching, null);
+});
+test("append requires acknowledged ID and stops on failed creation or close", async () => {
+  for (const mode of ["failure", "missing-id", "empty-id", "close", "move-failure"]) {
+    const f = fixture(), seen = [];
+    f.context.exec = async (_cmd, args) => {
+      seen.push(args[1]);
+      if (args[1] === "tab.move") return { code: 1, stdout: '{}' };
+      if (mode === "close") f.panel.close();
+      return mode === "failure" ? { code: 1, stdout: '{"error":"failed"}' }
+        : { code: 0, stdout: mode === "missing-id" ? '{}' : JSON.stringify({ tab: mode === "empty-id" ? "" : "exact-id" }) };
+    };
+    if (mode === "close") await f.panel.newTab();
+    else await assert.rejects(f.panel.newTab());
+    assert.deepEqual(seen, mode === "move-failure" ? ["tab.new", "tab.move"] : ["tab.new"]);
+  }
 });
 test("pending launch cannot be double-imported; user selection and edited root win late reply", async () => {
   const f = fixture(state([p(), p("b")]), []); let finish;
@@ -339,6 +355,20 @@ test("empty-project workspace shows its own root and never steals keyboard focus
 test("project picker includes empty projects and preserves their IDs on selection", () => {
   const f = surfaceFixture("picker"), root = f.render();
   byID(root, "pick-a").handlers.on_click(); assert.deepEqual(f.commands[0], { action: "select", id: "a" });
+});
+test("explicit terminal picker remains a shell rather than the default OpenCode session", () => {
+  const f = surfaceFixture("agents", "a");
+  byID(f.render(), "project-shell").handlers.on_click();
+  assert.deepEqual(f.commands[0], { action: "new-terminal", id: "a" });
+});
+test("explicit agents use the same acknowledged append path", async () => {
+  const f = fixture();
+  await f.panel.newTab("a", { argv: ["agent"], name: "Agent" });
+  const created = JSON.parse(f.calls.find(c => c.exec?.[1] === "tab.new").exec[2]);
+  assert.deepEqual(created.argv, ["agent"]);
+  const moved = JSON.parse(f.calls.find(c => c.exec?.[1] === "tab.move").exec[2]);
+  assert.equal(moved.id, "new-tab");
+  assert.equal(moved.index, 2147483647);
 });
 
 function openMachineList(f) {

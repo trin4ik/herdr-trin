@@ -99,7 +99,14 @@ export default class Projects extends View {
     const s = liveSpace(p, spaces());
     if (s) {
       this.select(p.id);
-      run("tab.new", { ...extra, space: s.id, folder: p.folder });
+      // Append only the acknowledged new tab; never infer its ID from focus
+      // or a list diff. Herdr clamps an oversized 1-based index to the end.
+      const created = await exec("herdr-app", ["do", "tab.new", JSON.stringify({ ...extra, space: s.id, folder: p.folder })]);
+      const result = JSON.parse(created.stdout || "{}");
+      if (created.code !== 0 || result.error || typeof result.tab !== "string" || !result.tab) throw new Error(result.error || created.stderr || "Не удалось создать вкладку.");
+      if (this.closed) return;
+      const moved = await exec("herdr-app", ["do", "tab.move", JSON.stringify({ id: result.tab, index: 2147483647 })]);
+      if (moved.code !== 0) throw new Error("Вкладка создана, но не перемещена в конец списка.");
       this.nativeFocus = focusKey();
       return;
     }
