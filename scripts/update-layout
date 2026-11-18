@@ -1,0 +1,23 @@
+#!/bin/sh
+# Updates a clean main checkout and makes Herdr reload mods/layouts linked to it.
+# Herdr does not notice changes behind a symlink, so every link into this checkout
+# is touched (touch -h), never replaced. Config dir: $HERDR_CONFIG_DIR or ~/.config/herdr-app.
+set -eu
+repo=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
+config=${HERDR_CONFIG_DIR:-$HOME/.config/herdr-app}
+cd "$repo"
+
+[ "$(git branch --show-current)" = main ] || { echo "switch to main first" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] || { echo "uncommitted changes in main; commit or stash them first" >&2; git status --short >&2; exit 1; }
+git pull -q --ff-only origin main
+echo "main: $(git log -1 --format='%h %s')"
+
+touched=0
+for link in "$config"/mods/* "$config"/layouts/*; do
+  [ -L "$link" ] || continue
+  target=$(cd "$(dirname "$link")" && cd "$(dirname "$(readlink "$link")")" 2>/dev/null && pwd -P) || continue
+  case "$target/" in
+    "$repo"/*) touch -h "$link"; echo "reloaded: ${link#"$config"/}"; touched=$((touched + 1)) ;;
+  esac
+done
+[ "$touched" -gt 0 ] || echo "no Herdr links into $repo under $config (installed copies are not updated)"
