@@ -150,9 +150,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "cannot bind configured LAN listener; no collection started")
 		return 1
 	}
-	handler := httpapi.New(s, token, time.Now)
+	handler := httpapi.New(s, token, time.Now, cfg.UsageSummaryFile)
 	if cfg.HTTPAuth == "none" {
-		handler = httpapi.NewUnauthenticated(s, time.Now)
+		handler = httpapi.NewUnauthenticated(s, time.Now, cfg.UsageSummaryFile)
 	}
 	server := &http.Server{
 		Handler:           handler,

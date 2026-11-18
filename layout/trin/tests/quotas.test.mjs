@@ -44,7 +44,7 @@ function fixture(width = 268, viewportHeight, colors = {}) {
   if (viewportHeight != null) context.window = { viewport_size: () => ({ width: 800, height: viewportHeight }) };
   const source = read("main.js").replace(/^import .*;\n/gm, "").replace("export default class", "class");
   vm.runInNewContext(read("details.js").replace(/^import .*;\n/gm, "").replaceAll("export function", "function")
-    + "\nthis.detailHelpers = { detailsHeight, balanceLabel };", context);
+    + "\nthis.detailHelpers = { detailsHeight, balanceLabel, apiUsageRow };", context);
   vm.runInNewContext(source + "\nthis.Panel = Quotas;", context);
   const panel = new context.Panel();
   Object.assign(panel, { expanded: null, revealed: null, disclosureVersion: 0, closed: false });
@@ -481,6 +481,68 @@ test("zero and unknown consumption both keep the track but do not invent a color
 
 // --- OpenCode Console -------------------------------------------------------
 const data = await import(`data:text/javascript,${encodeURIComponent(read("data.js"))}`);
+
+const rawUsage = {
+  calls: 807, cost_usd: 48.15, unpriced: 0, partial: false,
+  input_tokens: 1200, output_tokens: 200, reasoning_tokens: 50, cache_read_tokens: 3000, cache_write_tokens: 100,
+  since: null, generated_at: "2026-11-18T12:00:00Z",
+};
+function usageWindow(raw) {
+  return data.normalizeSnapshot({ schema_version: 1, generated_at: rawUsage.generated_at,
+    subscriptions: [{ id: "test", provider: "codex", quotas: [{ id: "week", usage: raw }] }] }).subscriptions[0].windows[0];
+}
+test("local usage normalizes valid, missing and invalid values without inventing zeros", () => {
+  assert.deepEqual(usageWindow(rawUsage).usage, {
+    calls: 807, costUSD: 48.15, unpriced: 0, partial: false,
+    tokens: { input: 1200, output: 200, reasoning: 50, cacheRead: 3000, cacheWrite: 100 },
+    since: null, generatedAt: rawUsage.generated_at,
+  });
+  for (const raw of [null, undefined, false, "bad", []]) assert.equal(usageWindow(raw).usage, null);
+  const broken = usageWindow({ calls: "807", cost_usd: -1, input_tokens: NaN, generated_at: "bad" }).usage;
+  assert.equal(broken.calls, null);
+  assert.equal(broken.costUSD, null);
+  assert.equal(broken.tokens.input, null);
+  assert.equal(broken.tokens.output, null);
+  assert.equal(broken.generatedAt, null);
+  assert.equal(usageWindow({ ...rawUsage, calls: 0, cost_usd: 0 }).usage.calls, 0);
+});
+test("API-price detail row covers ordinary, unpriced, partial and stale estimates", () => {
+  const { apiUsageRow } = fixture().detailHelpers;
+  const usage = usageWindow(rawUsage).usage;
+  const now = "2026-11-18T12:15:00Z", ordinary = apiUsageRow(usage, now);
+  assert.equal(ordinary.value, "$48.15 · 807 выз.");
+  assert.equal(ordinary.stale, false);
+  assert.match(ordinary.tooltip, /вход 1.2k · выход 200/);
+  assert.match(ordinary.tooltip, /Кэш: чтение 3.0k · запись 100/);
+  assert.match(ordinary.tooltip, /оценка по ценам API, не счёт/);
+  const unknown = apiUsageRow({ ...usage, unpriced: 2 }, now);
+  assert.equal(unknown.value, "$48.15 + ? · 807 выз.");
+  assert.match(unknown.tooltip, /2 вызовов без цены в models.dev/);
+  assert.match(apiUsageRow({ ...usage, partial: true }, now).tooltip, /учёт начат позже начала окна/);
+  const stale = apiUsageRow(usage, "2026-11-18T12:15:01Z");
+  assert.equal(stale.stale, true);
+  assert.match(stale.tooltip, /данные учёта устарели/);
+  assert.equal(apiUsageRow({ ...usage, costUSD: null, calls: null }, now).value, "— · — выз.");
+});
+test("API-price row adds exactly 20px to bar details, uses dim for stale, never appears in counters", () => {
+  const { panel, detailHelpers, cx, timers } = fixture(268, undefined, { dim: "dim", foreground: "ink" });
+  const base = { ...subscriptions[0], windows: [{ ...subscriptions[0].windows[0], resetsAt: "2099-01-01T00:00:00Z" }] };
+  const withUsage = { ...base, windows: [{ ...base.windows[0],
+    usage: usageWindow({ ...rawUsage, generated_at: "2000-01-01T00:00:00Z" }).usage }] };
+  const now = "2026-11-18T12:00:00Z";
+  assert.equal(detailHelpers.detailsHeight(withUsage, {}, undefined, now) - detailHelpers.detailsHeight(base, {}, undefined, now), 20);
+  panel.monitor.subscriptions = [withUsage];
+  panel.setOpen(base.id, true, cx); timers[0].callback(cx);
+  const root = panel.render(), value = nodes(root).find(el => text(el) === "$48.15 · 807 выз.");
+  assert.ok(text(root).includes("По ценам API"));
+  assert.equal(value.attrs.text_color[0], "dim");
+  assert.match(value.attrs.tooltip[0], /данные учёта устарели/);
+  const counter = { ...base, windows: [{ ...base.windows[0], metric: "counter" }] };
+  const counterUsage = { ...counter, windows: [{ ...counter.windows[0], usage: usageWindow(rawUsage).usage }] };
+  assert.equal(detailHelpers.detailsHeight(counterUsage, {}, undefined, now), detailHelpers.detailsHeight(counter, {}, undefined, now));
+  panel.monitor.subscriptions = [counterUsage];
+  assert.equal(text(panel.render()).includes("По ценам API"), false);
+});
 const consoleFixture = await import("./fixtures/quota-console.js");
 
 test("the console snapshot keeps counters and a percentage-free refusal", () => {

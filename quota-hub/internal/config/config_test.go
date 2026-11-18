@@ -24,6 +24,18 @@ func valid(t *testing.T) Config {
 	}
 }
 
+func TestUsageSummaryPath(t *testing.T) {
+	for _, path := range []string{"", "/nonexistent/summary.json", "relative.json", "/bad\x00path"} {
+		c := valid(t)
+		c.UsageSummaryFile = path
+		_, err := c.Specs()
+		want := path == "" || path == "/nonexistent/summary.json"
+		if (err == nil) != want {
+			t.Fatalf("usage path %q: %v", path, err)
+		}
+	}
+}
+
 func TestOpenCodeGoRemoteOnlyMigration(t *testing.T) {
 	c := valid(t)
 	c.Subscriptions = []Subscription{{ID: "opencode-go", Provider: "opencode", Enabled: true}}

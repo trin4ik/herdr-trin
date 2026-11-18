@@ -1,6 +1,6 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel, isCounter, counterRows, windowTitle, unlimited } from "./metrics.js";
+import { usage, remaining, percent, primaryWindow, quotaColor, hasWarning, resetLabel, updatedLabel, planLabel, isCounter, counterRows, windowTitle, unlimited, formatTokens } from "./metrics.js";
 
 // The height budget uses the same fixed line heights/padding as the builders.
 // Scroll owns overflow; individual windows and 4px tracks must never shrink.
@@ -13,7 +13,7 @@ const windowHeight = (window, now, divided) => {
     const rows = counterRows(window).length;
     return 46 + rows * 16 + Math.max(0, rows - 1) * 4 + (divided ? 1 : 0);
   }
-  return 136 + (expired(window, now) ? 20 : 0) + (divided ? 1 : 0);
+  return 136 + (window.usage ? 20 : 0) + (expired(window, now) ? 20 : 0) + (divided ? 1 : 0);
 };
 const warningMessage = (subscription, monitor, now) => monitor.error?.message || subscription.error?.message
   || (hasWarning(subscription, now) ? "Данные могут быть устаревшими" : null);
@@ -40,11 +40,27 @@ export function balanceLabel(balance) {
   return `${value}${balance.unit && balance.unit !== "credits" ? ` ${balance.unit}` : ""}`;
 }
 
+export function apiUsageRow(usage, now) {
+  if (!usage) return null;
+  const money = usage.costUSD == null ? "—" : `$${usage.costUSD.toFixed(2)}`;
+  const tokens = usage.tokens;
+  const stale = !usage.generatedAt || Date.parse(now) - Date.parse(usage.generatedAt) > 15 * 60 * 1000;
+  const tooltip = [
+    usage.unpriced > 0 ? `${usage.unpriced} вызовов без цены в models.dev` : null,
+    usage.partial ? "учёт начат позже начала окна" : null,
+    stale ? "данные учёта устарели" : null,
+    `Токены: вход ${formatTokens(tokens.input)} · выход ${formatTokens(tokens.output)} · рассуждения ${formatTokens(tokens.reasoning)}`,
+    `Кэш: чтение ${formatTokens(tokens.cacheRead)} · запись ${formatTokens(tokens.cacheWrite)}`,
+    "оценка по ценам API, не счёт",
+  ].filter(Boolean).join("\n");
+  return { value: `${money}${usage.unpriced > 0 ? " + ?" : ""} · ${usage.calls ?? "—"} выз.`, tooltip, stale };
+}
+
 export function quotaDetails(subscription, monitor, t, icon, revealed, close, viewportHeight) {
   const now = new Date().toISOString(), height = detailsHeight(subscription, monitor, viewportHeight, now);
-  const item = (label, value) => h_flex().w_full().min_w(0).h(16).flex_none().gap(10).items_center().text_size(10.5).line_height("16px")
+  const item = (label, value, tooltip = value, color = t.foreground) => h_flex().w_full().min_w(0).h(16).flex_none().gap(10).items_center().text_size(10.5).line_height("16px")
     .child(div().w(112).flex_none().truncate().text_color(t.muted).tooltip(label).child(label))
-    .child(div().flex_1().min_w(0).truncate().text_right().text_color(t.foreground).tooltip(value).child(value));
+    .child(div().flex_1().min_w(0).truncate().text_right().text_color(color).tooltip(tooltip).child(value));
   const primary = primaryWindow(subscription), plan = planLabel(subscription.plan);
   const profile = `${subscription.accountEmail || "Аккаунт не указан"}, ${plan || "тариф не указан"}`;
   const warning = warningMessage(subscription, monitor, now);
@@ -80,6 +96,7 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
         .children(subscription.windows.map((window, index) => {
           const value = usage(window), divided = separator(subscription, index);
           const title = windowTitle(window);
+          const api = apiUsageRow(window.usage, now);
           if (isCounter(window)) {
             const rows = counterRows(window);
             return v_flex().id(`quota-window-${subscription.id}-${window.id}`).h(windowHeight(window, now, divided)).flex_none().py(12).gap(6)
@@ -102,9 +119,10 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
             .child(h_flex().h(16).flex_none().justify_between().text_size(10.5).line_height("16px")
               .child(div().text_color(t.muted).child(unlimited(window) ? "Ограничение не действует" : `Осталось ${percent(remaining(window))}`))
               .child(div().text_color(t.dim).child(resetLabel(window.resetsAt, now))))
-            .child(v_flex().h(36).flex_none().gap(4)
+            .child(v_flex().h(api ? 56 : 36).flex_none().gap(4)
               .child(item("Начало", dateLabel(window.startedAt)))
-              .child(item("Сброс", dateLabel(window.resetsAt))))
+              .child(item("Сброс", dateLabel(window.resetsAt)))
+              .when(Boolean(api), el => el.child(item("По ценам API", api.value, api.tooltip, api.stale ? t.dim : t.foreground))))
             .when(expired(window, now), el => el.child(div().h(14).flex_none().line_height("14px")
               .text_size(10).text_color(t.ansi3).child("Срок прошёл · ждём снимок сервиса")));
         }))

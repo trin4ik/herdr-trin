@@ -38,6 +38,7 @@ type Subscription struct {
 }
 
 type Quota struct {
+	Usage            *Usage   `json:"usage,omitempty"`
 	Model            *string  `json:"model,omitempty"`
 	ID               string   `json:"id"`
 	Scope            *string  `json:"scope"`
@@ -61,6 +62,21 @@ type Quota struct {
 	// Counters carries extra absolute values of a counter metric (tokens, cost).
 	// Only known keys are rendered; unknown keys are ignored by older clients.
 	Counters map[string]float64 `json:"counters,omitempty"`
+}
+
+// Usage is a local API-price estimate, not a provider bill.
+type Usage struct {
+	Calls            int        `json:"calls"`
+	CostUSD          float64    `json:"cost_usd"`
+	Unpriced         int        `json:"unpriced"`
+	Partial          bool       `json:"partial"`
+	InputTokens      int64      `json:"input_tokens"`
+	OutputTokens     int64      `json:"output_tokens"`
+	ReasoningTokens  int64      `json:"reasoning_tokens"`
+	CacheReadTokens  int64      `json:"cache_read_tokens"`
+	CacheWriteTokens int64      `json:"cache_write_tokens"`
+	Since            *time.Time `json:"since"`
+	GeneratedAt      time.Time  `json:"generated_at"`
 }
 
 type Window struct {

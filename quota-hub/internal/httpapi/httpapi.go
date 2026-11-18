@@ -19,25 +19,26 @@ type api struct {
 	has   bool
 	open  bool
 	now   func() time.Time
+	usage usageFile
 }
 
 // New returns the handler. With an empty token every protected endpoint answers
 // 401, so a misconfigured caller can never expose the snapshot unauthenticated.
 // now defaults to time.Now.
-func New(s *store.Store, token string, now func() time.Time) http.Handler {
+func New(s *store.Store, token string, now func() time.Time, usagePath ...string) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	return &api{st: s, token: sha256.Sum256([]byte(token)), has: token != "", now: now}
+	return &api{st: s, token: sha256.Sum256([]byte(token)), has: token != "", now: now, usage: newUsageFile(usagePath)}
 }
 
 // NewUnauthenticated is an explicit operator opt-out. The listener and network
 // proxy must enforce the chosen private-network boundary. New stays fail-closed.
-func NewUnauthenticated(s *store.Store, now func() time.Time) http.Handler {
+func NewUnauthenticated(s *store.Store, now func() time.Time, usagePath ...string) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	return &api{st: s, open: true, now: now}
+	return &api{st: s, open: true, now: now, usage: newUsageFile(usagePath)}
 }
 
 func (a *api) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +91,10 @@ func (a *api) quotas(w http.ResponseWriter) {
 		write(w, http.StatusServiceUnavailable, []byte(`{"error":"not_ready"}`))
 		return
 	}
-	body, err := json.Marshal(a.st.Snapshot(a.now()))
+	now := a.now()
+	snapshot := a.st.Snapshot(now)
+	a.usage.attach(&snapshot, now)
+	body, err := json.Marshal(snapshot)
 	if err != nil {
 		write(w, http.StatusInternalServerError, []byte(`{"error":"internal"}`))
 		return

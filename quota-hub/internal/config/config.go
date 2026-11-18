@@ -30,6 +30,7 @@ type Config struct {
 	Listen              string         `json:"listen"`
 	AllowWildcardListen bool           `json:"allow_wildcard_listen,omitempty"`
 	DataDir             string         `json:"data_dir"`
+	UsageSummaryFile    string         `json:"usage_summary_file,omitempty"`
 	HTTPAuth            string         `json:"http_auth,omitempty"`
 	HTTPTokenEnv        string         `json:"http_token_env,omitempty"`
 	PublishAccountEmail bool           `json:"publish_account_email,omitempty"`
@@ -118,6 +119,9 @@ func (c Config) Specs() ([]collectors.Spec, error) {
 	}
 	if !filepath.IsAbs(c.DataDir) || filepath.Clean(c.DataDir) == string(filepath.Separator) {
 		return nil, errors.New("data_dir must be an absolute non-root directory")
+	}
+	if c.UsageSummaryFile != "" && (!filepath.IsAbs(c.UsageSummaryFile) || strings.ContainsRune(c.UsageSummaryFile, 0)) {
+		return nil, errors.New("usage_summary_file must be an absolute path")
 	}
 	switch c.HTTPAuth {
 	case "", "bearer":

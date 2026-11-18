@@ -48,6 +48,18 @@ export function windowLabel(quota) {
   return scope ? `${label} · ${scope}` : label;
 }
 
+function normalizeUsage(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const amount = value => validAmount(value) ? value : null;
+  return {
+    calls: amount(raw.calls), costUSD: amount(raw.cost_usd), unpriced: amount(raw.unpriced),
+    partial: raw.partial === true,
+    tokens: { input: amount(raw.input_tokens), output: amount(raw.output_tokens),
+      reasoning: amount(raw.reasoning_tokens), cacheRead: amount(raw.cache_read_tokens), cacheWrite: amount(raw.cache_write_tokens) },
+    since: date(raw.since), generatedAt: date(raw.generated_at),
+  };
+}
+
 function normalizeQuota(q) {
   if (!q || typeof q.id !== "string" || !q.id) throw new Error("Некорректное окно лимита");
   const metric = q.metric === "counter" ? "counter" : "quota";
@@ -62,6 +74,7 @@ function normalizeQuota(q) {
     limit: validAmount(q.limit) ? q.limit : null,
     remaining: validAmount(q.remaining) ? q.remaining : null,
     counters: normalizeCounters(q.counters),
+    usage: normalizeUsage(q.usage),
     limited: typeof q.limited === "boolean" ? q.limited : null,
     observedAt: date(q.observed_at),
     startedAt: date(q.window?.started_at), resetsAt: date(q.window?.reset_at), durationSeconds: q.window?.duration_seconds ?? null,
