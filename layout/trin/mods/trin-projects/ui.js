@@ -2,7 +2,7 @@
 // Projects keep their name/root; empty and offline are visible, not hidden sessions.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { props, closeOverlay, theme, knownAgents, run, agents, window, keys } from "herdr";
+import { props, closeOverlay, theme, knownAgents, run, agents, window, keys, shared } from "herdr";
 import { launchLocked } from "./data.js";
 import { read, write, current, live, ready, command, overlay, target } from "./store.js";
 import { initProjectForm, renderProjectForm } from "./form.js";
@@ -111,10 +111,12 @@ export function renderSurface(view, cx) {
     return button(id, text, choose, enabled).w_full().when(i === view.at, el => el.bg(t.selected));
   };
   return root.p(5).gap(3)
-    .child(item("project-menu-new", "Новая сессия…", () => overlay("agents", { project: p.id }), available && !launchLocked(p)))
+    .child(item("project-menu-new", "Новая сессия · OpenCode", () => command("new-tab", p.id), available && !launchLocked(p)))
+    .child(item("project-menu-agents", "Другой агент / терминал…", () => overlay("agents", { project: p.id }), available && !launchLocked(p)))
     .child(item("project-menu-edit", "Настройки проекта…", () => overlay("form", { project: p.id })))
     .child(item("project-menu-close", "Закрыть все сессии…", () => run("space.close", { id: s.id }), available && Boolean(s)))
     .child(div().h(1).my(4).bg(t.border))
-    .child(item("project-menu-remove", "Удалить пустой проект…", () => command("confirm-remove", p.id), available && !s && !launchLocked(p)))
+    .child(item("project-menu-remove", shared("trin.projects.native-spaces") === true ? "Удалить проект и Space…" : "Удалить пустой проект…",
+      () => command("confirm-remove", p.id), available && (!s || shared("trin.projects.native-spaces") === true) && !p.pending))
     .child(div().px(10).text_size(11).text_color(t.muted).child(s ? "Закрытие сессий сохраняет проект" : !available ? "Проект сохранён · машина недоступна" : "Нет сессий"));
 }

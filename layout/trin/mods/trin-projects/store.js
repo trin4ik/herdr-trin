@@ -11,6 +11,6 @@ export function command(action, id = null) {
 }
 export function overlay(surface, extra = {}) {
   openOverlay({ mod: "trin-projects", kind: surface === "menu" ? "popup" : "dialog", width: surface === "menu" ? 250 : surface === "form" ? 472 : 520,
-    ...(surface === "form" ? {} : { height: surface === "menu" ? 230 : surface === "picker" ? 480 : 390 }), props: { surface, ...extra } });
+    ...(surface === "form" ? {} : { height: surface === "menu" ? 270 : surface === "picker" ? 480 : 390 }), props: { surface, ...extra } });
 }
 export const target = () => read().projects.find(p => p.id === props()?.project);

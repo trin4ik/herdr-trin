@@ -1,5 +1,20 @@
 # Публичный журнал
 
+## 2026-11-18 — возвращены Projects→Spaces, Dock и знаки провайдеров
+
+- Восстановлены согласованные функции WIP: событийное Projects→Spaces,
+  фоновые shell для пустых проектов и после last-close, имена/порядок и точные
+  подтверждённые ID без повторного создания при неизвестном результате.
+- Drag проектов wide/rail с before/after-индикатором; удаление проекта/Space
+  только с предупреждением о закрытии всех сессий. Директории не удаляются.
+- Возвращены меню OpenCode/другой агент/терминал и пояснения формы, Dock badge
+  blocked + непросмотренные done, SVG Kimi/Ollama/OpenCode с реальными aliases.
+- Сохранены уже возвращённые вкладки, актуальные квоты/API-учёт/backend.
+  README/AGENTS и regression tests обновлены.
+- Проверено: 236 JS, 70 Python, native checks Projects/Agents/Tabs и eager
+  drag/drop rows wide/rail, detector. Проверки приватности и live-применение
+  выполняются далее; mobile/reconnect/physical clicks/light/narrow пока не проверены.
+
 ## 2026-11-18 — восстановлена полоса вкладок и порядок новых сессий
 
 - `trin-tabs/main.js`: возвращены прежние чистые title + close, кнопки OpenCode/⌘T

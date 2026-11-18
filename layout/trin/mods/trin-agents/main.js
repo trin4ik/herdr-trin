@@ -3,7 +3,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, terminals, focused, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, openOverlay, closeOverlay, props, window, layout } from "herdr";
 import { ActivityMonitor } from "./activity.js";
 import { WorkingClock } from "./metrics.js";
 import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
@@ -74,6 +74,18 @@ export default class Agents extends View {
 
   close() {
     this.activity?.close();
+    // Sort-menu copies never own the Dock badge.
+    if (this.badge !== undefined) setBadge(null);
+  }
+
+  updateBadge(list) {
+    // Use Herdr's live status before sorting/held Done presentation. Seen
+    // results become idle; duplicate panes must not count a session twice.
+    const count = new Set(list.filter(a => a.status === "blocked" || a.status === "done").map(a => a.address)).size;
+    const text = count ? String(count) : null;
+    if (this.badge === text) return;
+    setBadge(text);
+    this.badge = text;
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -203,6 +215,7 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
+    this.updateBadge(list);
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
     const sp = spaces();

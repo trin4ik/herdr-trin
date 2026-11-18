@@ -2,7 +2,7 @@
 // Height is the exact native row budget; scrolling only caps a small viewport.
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, InputState, Input, Select, Popup } from "gpui-base";
-import { props, closeOverlay, theme, machines, home, pickFolder } from "herdr";
+import { props, closeOverlay, theme, machines, home, pickFolder, shared } from "herdr";
 import { nextColor, validFolder, updateProject, directoryName } from "./data.js";
 import { read, write, command, target } from "./store.js";
 import { openRemoteFolderPicker, renderRemoteFolderPicker, cancelRemoteFolderPicker } from "./remote-picker.js";
@@ -176,9 +176,10 @@ export function renderProjectForm(view) {
       .child(div().flex_1().min_w(0).child(input("folder", "Корневая директория проекта")))
       .child(formButton("project-pick-folder", "Выбрать…", cx => pickProjectFolder(view, cx))
         .disabled(view.picking).tooltip(view.machine === null ? "Выбрать директорию на этом компьютере" : `Выбрать директорию на ${view.machine}`)), view.fieldErrors.folder))
-    .child(div().h(32).flex_none().line_height("16px").text_size(11.5).text_color(t.muted).child(view.machine === null
-      ? "Директория на этом компьютере.\nНовые сессии будут открываться здесь."
-      : "Директория на выбранной машине.\nНовые сессии будут открываться здесь."))
+    .child(div().h(32).flex_none().line_height("16px").text_size(11.5).text_color(t.muted).child(shared("trin.projects.native-spaces") === true
+      ? p ? "Проект связан с родным Space.\nКорень применяется к новым сессиям." : "Родной Space с обычным терминалом.\nФоновый запуск без OpenCode."
+      : view.machine === null ? "Директория на этом компьютере.\nНовые сессии будут открываться здесь."
+        : "Директория на выбранной машине.\nНовые сессии будут открываться здесь."))
     .when(Boolean(view.error), el => el.child(div().h(32).flex_none().line_height("16px").text_size(11.5).text_color(t.blocked).child(view.error)))
     .child(h_flex().h(34).flex_none().gap(8).justify_end()
       .child(formButton("project-form-cancel", "Отмена", () => closeOverlay(props().overlay)))

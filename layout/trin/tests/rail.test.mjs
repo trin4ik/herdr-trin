@@ -30,13 +30,15 @@ function fixture() {
     address: `t${seq}`, pane: `p${seq}`, space: "s", tab: "tab", status, seq,
     state: "live", focused: seq === 1, program: { name: "OpenCode" },
   }));
-  const commands = [], stored = {};
+  const commands = [], badges = [], stored = {};
   const t = { accent: "#8ab4f8", chrome: "#101112", selected: "#25272b", muted: "#999999", dim: "#777777", idle: "#777777", working: "#d9bc65", blocked: "#e09080", done: "#8cb383" };
   const context = { View: class {}, div: element, svg: element, h_flex: element, v_flex: element,
+    formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "",
     theme: () => t, props: () => ({}), layout: () => ({ id: "sidebar", size: { px: 44 } }),
     spaces: () => spaces, agents: () => agents, terminals: () => agents,
     shared: key => stored[key], setShared: (key, value) => { stored[key] = value; },
     focused: () => ({ agent: "t1" }), setAgentOrder: order => { context.order = order; },
+    setBadge: text => badges.push(text),
     window: () => ({ platform: "macos" }),
     localStorage: { getItem: () => null, setItem() {} },
     run: (name, args) => commands.push({ name, args }),
@@ -44,10 +46,58 @@ function fixture() {
   vm.runInNewContext(read("trin-agents/appearance.js") + "\n" + read("trin-agents/main.js")
     + "\nthis.AgentsPanel = Agents;", context);
   const panel = new context.AgentsPanel();
-  Object.assign(panel, { pins: [], changed: {}, folded: new Set(), clock: { sync() {} },
-    activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), notice: () => null } });
-  return { panel, commands, agents, context, t, spaces };
+  Object.assign(panel, { pins: [], changed: {}, folded: new Set(), clock: { sync() {}, value: () => null },
+    activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
+  return { panel, commands, badges, agents, context, t, spaces };
 }
+
+test("Dock badge sums live blocked and unseen done sessions reactively across projects", () => {
+  const { panel, agents, badges, context } = fixture();
+  agents[3].space = "remote/other-project";
+  panel.render();
+  assert.deepEqual(badges, ["2"]);
+  panel.render();
+  assert.deepEqual(badges, ["2"], "unchanged renders do not write the badge");
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  context.setShared("agents.sort", "grouped");
+  panel.folded = new Set(["s", "remote/other-project"]);
+  panel.render();
+  assert.deepEqual(badges, ["2"], "wide/grouped/folded presentation does not change the count");
+  agents.push({ ...agents[2] });
+  panel.render();
+  assert.deepEqual(badges, ["2"], "duplicate panes count once by terminal address");
+  agents[3].status = "idle";
+  panel.render();
+  assert.deepEqual(badges, ["2", "1"], "seen done results no longer count");
+  agents.splice(2);
+  panel.render();
+  assert.deepEqual(badges, ["2", "1", null], "removed/disconnected sessions clear the badge");
+  agents.push({ address: "remote/new", status: "blocked" });
+  panel.updateBadge(agents);
+  assert.equal(badges.at(-1), "1", "reconnected/new sessions count immediately");
+  panel.close();
+  assert.equal(badges.at(-1), null, "closing the panel clears its badge");
+  context.props = () => ({ sortMenu: true });
+  const menu = new context.AgentsPanel();
+  const before = badges.length;
+  menu.render();
+  menu.close();
+  assert.equal(badges.length, before, "sort-menu overlays never write or clear the badge");
+});
+
+test("Dock badge clears on initial empty snapshot and ignores held Done presentation", () => {
+  const { panel, badges } = fixture();
+  panel.updateBadge([]);
+  panel.updateBadge([]);
+  assert.deepEqual(badges, [null]);
+  panel.held = { address: "seen", rank: 3 };
+  const seen = { address: "seen", status: "idle" };
+  assert.equal(panel.rank(seen), 3);
+  panel.updateBadge([seen, { address: "busy", status: "working" }]);
+  assert.deepEqual(badges, [null]);
+  panel.updateBadge([{ address: "waiting", status: "blocked", focused: true }]);
+  assert.equal(badges.at(-1), "1", "blocked counts until resolved even while focused");
+});
 
 test("agent rail uses project squares, state indicators and full session tooltips, not numbers", () => {
   const { panel, agents, commands, context } = fixture();
@@ -83,6 +133,43 @@ test("agent rail uses project squares, state indicators and full session tooltip
   assert.equal(commands.at(-2).args.px, 268);
   assert.equal(commands.at(-1).args.id, "quotas");
   assert.equal(commands.at(-1).args.px, 152);
+});
+
+test("Agents uses the same provider assets as subscriptions, retaining unknown-provider fallback", () => {
+  const context = { div: element, svg: path => element().asset(path), h_flex: element,
+    formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "" };
+  vm.runInNewContext(read("trin-agents/appearance.js") + "\nthis.details = sessionDetails;", context);
+  const quotas = read("trin-quotas/main.js");
+  for (const provider of ["openai", "anthropic", "ollama", "kimi", "opencode"]) {
+    const root = context.details({ muted: "muted" }, { providerID: provider }, null, null, "test");
+    const icon = nodes(root).find(n => n.attrs.asset);
+    const path = `assets/trin-providers/${provider === "opencode" ? "opencode-logo" : provider}.svg`;
+    assert.equal(icon.attrs.asset[0], path);
+    assert.equal(icon.attrs.text_color[0], "muted");
+    assert.ok(quotas.includes(provider));
+    if (provider === "opencode") {
+      assert.equal(icon.attrs.w[0], 10); assert.equal(icon.attrs.h[0], 12.5);
+      assert.ok(quotas.includes(path));
+    } else assert.equal(icon.attrs.size[0], provider === "kimi" ? 16 : 20);
+  }
+  const unknown = context.details({}, { providerID: "custom" }, null, null, "test");
+  assert.equal(nodes(unknown).some(n => n.attrs.asset), false);
+  assert.ok(text(unknown).startsWith("C"));
+  for (const [provider, mark] of [["kimi-code-plan-cn", "kimi"], ["kimi-for-coding", "kimi"], ["ollama-cloud", "ollama"], ["opencode-go", "opencode"]]) {
+    const root = context.details({ muted: "muted" }, { providerID: provider, modelID: "k3.1-pro-highspeed" }, null, null, "test");
+    const icon = nodes(root).find(n => n.attrs.asset);
+    const path = `assets/trin-providers/${mark === "opencode" ? "opencode-logo" : mark}.svg`;
+    assert.equal(icon.attrs.asset[0], path);
+    if (mark === "opencode") {
+      assert.equal(icon.attrs.w[0], 10);
+      assert.equal(icon.attrs.h[0], 12.5);
+      assert.ok(quotas.includes(path));
+    } else assert.equal(icon.attrs.size[0], mark === "kimi" ? 16 : 20);
+    assert.ok(byID(root, "agent-test-model").attrs.tooltip[0].startsWith(provider + "/"));
+    assert.equal(nodes(root).some(n => n.childNodes.includes(provider[0].toUpperCase())), false);
+  }
+  const routed = context.details({}, { providerID: "custom", modelID: "kimi-k3.1" }, null, null, "test");
+  assert.equal(nodes(routed).some(n => n.attrs.asset), false, "model name is not provider identity");
 });
 
 test("spaces rail shows all project avatars even for folded machines and selects by ID", () => {
