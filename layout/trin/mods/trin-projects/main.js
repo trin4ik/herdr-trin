@@ -8,6 +8,7 @@ import { seeds } from "./migration.js";
 import { read, write, command, overlay } from "./store.js";
 import { initSurface, renderSurface, renderStatus } from "./ui.js";
 import { disposeRemoteFolderPicker } from "./remote-picker.js";
+import { nativeActions, nativeSignature } from "./native.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -45,7 +46,7 @@ export default class Projects extends View {
     disposeRemoteFolderPicker(this);
   }
 
-  sync(cx) {
+  sync(cx, mirror = true) {
     let state = read();
     let recovered = false;
     // While space.new is in flight, the new space may be visible before its
@@ -64,7 +65,57 @@ export default class Projects extends View {
     this.nativeFocus = key;
     this.syncWorkspace(state);
     this.nativeFocus = focusKey();
+    if (mirror) this.syncNative(state, cx);
     return state;
+  }
+
+  syncNative(state, cx) {
+    if (this.closed || this.mirroring || this.removing || this.launching || this.jobBusy || shared("trin.projects.native-spaces") !== true) return;
+    const signature = nativeSignature(state, spaces(), machines());
+    if (signature === this.mirrorSignature) return;
+    this.mirrorSignature = signature;
+    const action = nativeActions(state, spaces(), machines())[0];
+    if (!action) return;
+    this.mirroring = true;
+    cx.spawn(async cx => {
+      let creating = null;
+      try {
+        // One acknowledged command at a time, then replan from live reactive
+        // data. Never apply a stale batch after a user rename/reorder/delete.
+        if (this.closed) return;
+        let args;
+        if (action.kind === "create") {
+          const p = read().projects.find(p => p.id === action.project);
+          if (!p || p.pending || liveSpace(p, spaces()) || !machineReady(p, machines())) return;
+          creating = p.id;
+          this.launching = p.id;
+          write(updateProject(read(), p.id, { pending: { at: Date.now(), name: p.name, folder: p.folder, before: spaces().map(s => s.id) } }));
+          args = launchArgs(p, { focus: false });
+        } else args = action.kind === "rename" ? { id: action.id, name: action.name } : { id: action.id, index: action.index };
+        const result = await exec("herdr-app", ["do", `space.${action.kind === "create" ? "new" : action.kind}`, JSON.stringify(args)]);
+        const reply = JSON.parse(result.stdout || "{}");
+        if (result.code !== 0 || reply.error) throw new Error(reply.error || result.stderr || "Не удалось синхронизировать Space.");
+        if (this.closed) return;
+        if (creating) {
+          if (typeof reply.space !== "string" || !reply.space) throw new Error("Herdr не подтвердил ID созданного Space.");
+          const p = read().projects.find(p => p.id === creating);
+          if (p) write(updateProject(read(), p.id, { space: reply.space,
+            pending: { ...p.pending, createdSpace: reply.space } }));
+          // Retain the ack until the native snapshot actually contains it:
+          // a delayed document event must never create a second shell.
+        }
+      } catch (e) {
+        if (!this.closed) {
+          const p = creating && read().projects.find(p => p.id === creating);
+          if (p?.pending) write(updateProject(read(), p.id, { pending: { ...p.pending, failed: true } }));
+          notify({ title: "Projects → Spaces", body: String(e.message ?? e), level: "error" });
+        }
+      } finally {
+        if (creating) this.launching = null;
+        this.mirroring = false;
+        if (!this.closed) { this.sync(cx); cx.notify(); }
+      }
+    });
   }
 
   syncWorkspace(state) {
@@ -89,7 +140,7 @@ export default class Projects extends View {
     this.syncWorkspace(read());
   }
 
-  async newTab(id, extra = {}) {
+  async newTab(id, extra = { argv: ["opencode", "--auto"] }) {
     if (this.closed) return;
     let state = read();
     const p = state.projects.find(p => p.id === (id ?? state.selected));
@@ -99,7 +150,15 @@ export default class Projects extends View {
     const s = liveSpace(p, spaces());
     if (s) {
       this.select(p.id);
-      run("tab.new", { ...extra, space: s.id, folder: p.folder });
+      // Native tab.new inserts after the active tab. Use its acknowledged ID,
+      // never a list diff or guessed focus, then append that exact tab. Herdr
+      // clamps an oversized 1-based index to the end (verified on this version).
+      const created = await exec("herdr-app", ["do", "tab.new", JSON.stringify({ ...extra, space: s.id, folder: p.folder })]);
+      const result = JSON.parse(created.stdout || "{}");
+      if (created.code !== 0 || result.error || typeof result.tab !== "string") throw new Error(result.error || created.stderr || "Не удалось создать вкладку.");
+      if (this.closed) return;
+      const moved = await exec("herdr-app", ["do", "tab.move", JSON.stringify({ id: result.tab, index: 2147483647 })]);
+      if (moved.code !== 0) throw new Error("Вкладка создана, но не перемещена в конец списка.");
       this.nativeFocus = focusKey();
       return;
     }
@@ -142,8 +201,8 @@ export default class Projects extends View {
     this.jobBusy = true;
     cx.spawn(async cx => {
       try {
-        let extra = {};
-        if (agentKey) {
+        let extra = agentKey === "shell" ? {} : { argv: ["opencode", "--auto"] };
+        if (agentKey && agentKey !== "shell") {
           if (!machineReady(p, machines())) throw new Error("Машина недоступна.");
           const list = await knownAgents({ on: p.machine });
           if (this.closed || read().selected !== intended) return;
@@ -164,9 +223,15 @@ export default class Projects extends View {
   async act(message, cx) {
     const separator = message.indexOf("--"), action = separator < 0 ? message : message.slice(0, separator);
     const id = separator < 0 ? null : decodeURIComponent(message.slice(separator + 2));
-    const state = this.sync(cx);
+    const state = this.sync(cx, false);
     if (action === "select") this.select(id);
+    else if (action === "enable-native-spaces" || action === "disable-native-spaces") {
+      setShared("trin.projects.native-spaces", action === "enable-native-spaces");
+      this.mirrorSignature = null;
+    }
+    else if (action === "sync-native-spaces") this.mirrorSignature = null;
     else if (action === "new-tab") this.startLaunch(id, null, cx);
+    else if (action === "new-terminal") this.startLaunch(id, "shell", cx);
     else if (action === "new") overlay("form");
     else if (action === "browse") {
       const machine = id ?? selectedProject(state)?.machine;
@@ -202,14 +267,26 @@ export default class Projects extends View {
       const list = this.ordered(state), at = list.findIndex(p => p.id === state.selected);
       const p = action === "index" ? list[Number(id) - 1] : list[(at + (action === "next" ? 1 : -1) + list.length) % list.length];
       if (p) this.select(p.id);
-    } else if (action === "confirm-remove" || action === "remove") {
+    } else if (action === "confirm-remove" || action === "remove" || action === "remove-native") {
       const p = state.projects.find(p => p.id === id);
-      if (!p || launchLocked(p) || this.launching === id || !machineReady(p, machines()) || liveSpace(p, spaces())) throw new Error("Сначала закройте сессии проекта и дождитесь подключения машины.");
+      const s = liveSpace(p, spaces()), mirrored = shared("trin.projects.native-spaces") === true;
+      if (!p || p.pending || this.launching === id || !machineReady(p, machines()) || (s && (!mirrored || action === "remove"))) throw new Error("Сначала закройте сессии проекта и дождитесь подключения машины.");
       if (action === "confirm-remove") {
         // Confirmation delegates back to this owner and rechecks live state.
         openOverlay({ mod: "confirm", kind: "dialog", width: 440, height: 210, props: { title: `Удалить проект «${p.name}»?`,
-          detail: "Директория и файлы останутся на машине. Удаляется только запись в Projects." + (p.pending ? "\nРезультат прежнего запуска неизвестен: если он завершится позднее, Space появится отдельно." : ""), command: { name: `trin-projects.remove--${encodeURIComponent(id)}` } } });
-      } else { write(removeProject(state, id)); this.select(read().selected); }
+          detail: s ? `Будут закрыты ВСЕ сессии проекта (${s.tabs.length}) и удалён родной Space. Директория и файлы останутся на машине.`
+            : "Директория и файлы останутся на машине. Удаляется только запись в Projects.",
+          command: { name: `trin-projects.${s ? "remove-native" : "remove"}--${encodeURIComponent(id)}` } } });
+      } else {
+        this.removing = id;
+        try {
+          if (s) {
+            const result = await exec("herdr-app", ["do", "space.close", JSON.stringify({ id: s.id, confirmed: true })]);
+            if (result.code !== 0) throw new Error("Не удалось закрыть Space. Проект не удалён.");
+          }
+          if (!this.closed) { write(removeProject(read(), id)); this.select(read().selected); }
+        } finally { this.removing = null; }
+      }
     }
     this.sync(cx);
   }
@@ -219,35 +296,60 @@ export default class Projects extends View {
     return [null, ...names].flatMap(machine => state.projects.filter(p => p.machine === machine));
   }
 
+  cancelProjectDrag(cx) {
+    if (!this.pressed) return;
+    this.pressed = null; this.over = null; this.projectDragging = false;
+    cx.notify();
+  }
+
+  draggableProject(el, p) {
+    return el.on_mouse_down("left", (e, cx) => {
+      cx.stop_propagation(); this.pressed = p.id; this.over = p.id;
+      this.pressPoint = e?.position; this.projectDragging = false; this.dropAfter = false;
+    }).on_mouse_move((e, cx) => {
+      if (!this.pressed) return;
+      const state = read(), source = state.projects.find(k => k.id === this.pressed);
+      if (!source) { this.cancelProjectDrag(cx); return; }
+      const moved = this.projectDragging || (this.pressPoint && e?.position
+        ? Math.hypot(e.position.x - this.pressPoint.x, e.position.y - this.pressPoint.y) >= 4 : p.id !== source.id);
+      const over = moved && source.machine === p.machine ? p.id : null;
+      const after = e?.local_position && e?.bounds ? e.local_position.y >= e.bounds.height / 2
+        : state.projects.indexOf(source) < state.projects.findIndex(k => k.id === p.id);
+      if (this.over !== over || this.dropAfter !== after || this.projectDragging !== moved) {
+        this.over = over; this.dropAfter = after; this.projectDragging = moved; cx.notify();
+      }
+    }).on_mouse_up("left", (_e, cx) => {
+      cx.stop_propagation();
+      const from = this.pressed, over = this.over, moved = this.projectDragging, after = this.dropAfter;
+      this.cancelProjectDrag(cx);
+      if (!moved && from === p.id) this.select(p.id);
+      else if (moved && over === p.id) write(moveProject(read(), from, p.id, after));
+    }).on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.cancelProjectDrag(cx); overlay("menu", { project: p.id }); });
+  }
+
+  projectDropLine(p, t) {
+    return div().id(`project-drop-${p.id}`).absolute().left(0).right(0).h(2).bg(t.accent)
+      .when(this.dropAfter, el => el.bottom(0)).when(!this.dropAfter, el => el.top(0));
+  }
+
   row(p, t, collapsed) {
     const state = read(), on = state.selected === p.id, fill = p.color?.startsWith("#") ? p.color : MARK[p.color] ?? t.ansi6;
     const s = liveSpace(p, spaces()), available = machineReady(p, machines());
     const list = agents().filter(a => a.space === s?.id), rank = { blocked: 4, done: 3, working: 2, idle: 1 };
     const status = list.reduce((best, a) => (rank[a.status] ?? 0) > (rank[best] ?? 0) ? a.status : best, null);
     const working = list.some(a => a.status === "working");
-    const title = `${p.name}\n${p.machine ?? "This computer"}\n${p.folder}\n${!available ? "Машина недоступна / подключается" : `${s?.tabs?.length ?? 0} сессий`}${p.pending ? "\nРезультат предыдущего запуска ещё не подтверждён" : ""}`;
+    const title = `${p.name}\n${p.machine ?? "This computer"}\n${p.folder}\n${!available ? "Машина недоступна / подключается" : `${s?.tabs?.length ?? 0} сессий`}${p.pending ? "\nРезультат предыдущего запуска ещё не подтверждён" : ""}\nПеретащите выше/ниже в пределах машины`;
     const avatar = size => h_flex().size(size).flex_none().rounded(5).bg(fill).items_center().justify_center().font_bold().text_color("#ffffff").text_size(collapsed ? 12 : 10.5).child([...p.name][0]?.toUpperCase() ?? "?");
-    if (collapsed) return h_flex().id(`project-${p.id}`).h(36).flex_none().justify_center().items_center().cursor_pointer().tooltip(title)
-      .on_click(() => this.select(p.id)).on_mouse_down("right", () => overlay("menu", { project: p.id }))
+    if (collapsed) return this.draggableProject(h_flex().id(`project-${p.id}`).relative().h(36).flex_none().justify_center().items_center().cursor_pointer().tooltip(title), p)
+      .when(this.projectDragging && this.pressed === p.id, el => el.opacity(0.5))
+      .when(this.projectDragging && this.over === p.id && this.pressed !== p.id, el => el.child(this.projectDropLine(p, t)))
       .child(h_flex().size(32).flex_none().rounded(7).items_center().justify_center()
         .when(on, el => el.bg(t.selected).border(1).border_color(t.accent)).when(!on, el => el.hover(s => s.bg(t.hover)))
         .child(avatar(22).when(!available, el => el.opacity(0.55))));
-    return h_flex().id(`project-${p.id}`).h(30).px(8).gap(9).flex_none().items_center().rounded(8).tooltip(title)
+    return this.draggableProject(h_flex().id(`project-${p.id}`).relative().h(30).px(8).gap(9).flex_none().items_center().rounded(8).tooltip(title), p)
       .when(on, el => el.bg(t.selected)).when(!on, el => el.hover(s => s.bg(t.hover)))
-      .when(this.pressed === p.id && this.over !== p.id, el => el.opacity(0.5))
-      .on_mouse_down("left", () => { this.pressed = p.id; this.over = p.id; })
-      .on_mouse_move((_e, cx) => {
-        const source = read().projects.find(k => k.id === this.pressed);
-        const over = source?.machine === p.machine ? p.id : null;
-        if (this.pressed && over !== this.over) { this.over = over; cx.notify(); }
-      })
-      .on_mouse_up("left", (_e, cx) => {
-        const from = this.pressed, over = this.over; this.pressed = null; this.over = null;
-        if (from === p.id) this.select(p.id);
-        else if (over === p.id) write(moveProject(read(), from, p.id));
-        cx.notify();
-      })
-      .on_mouse_down("right", () => overlay("menu", { project: p.id }))
+      .when(this.projectDragging && this.pressed === p.id, el => el.opacity(0.5))
+      .when(this.projectDragging && this.over === p.id && this.pressed !== p.id, el => el.child(this.projectDropLine(p, t)))
       .child(avatar(18).when(!available, el => el.opacity(0.55)))
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(p.name))
       .when(working, el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
@@ -287,7 +389,9 @@ export default class Projects extends View {
         .child(div().id("project-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).tooltip("Новый проект")
           .hover(s => s.bg(t.hover).text_color(t.foreground)).on_click(() => overlay("form")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().when(!collapsed, el => el.mode("always"))
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; this.over = null; cx.notify(); }).children(groups));
+        .on_mouse_up("left", (_e, cx) => this.cancelProjectDrag(cx))
+        .on_hover((over, cx) => { if (!over) this.cancelProjectDrag(cx); })
+        .on_mouse_down_out((_e, cx) => this.cancelProjectDrag(cx)).children(groups));
   }
 }
 // Modified derivative of Herdr spaces (Apache-2.0): persistent project controller/UI.

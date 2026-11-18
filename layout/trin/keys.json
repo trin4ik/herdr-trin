@@ -1,6 +1,7 @@
 {
   "layout:trin": {
     "cmd-t": "trin-projects.new-tab",
+    "cmd-shift-t": "trin-projects.new-terminal",
     "cmd-n": "trin-projects.new",
     "cmd-p": "trin-projects.picker",
     "cmd-w": "trin-projects.close-tab",

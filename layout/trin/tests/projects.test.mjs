@@ -5,6 +5,7 @@ import test from "node:test";
 
 const source = file => fs.readFileSync(new URL(`../mods/trin-projects/${file}`, import.meta.url), "utf8");
 const data = await import(`data:text/javascript,${encodeURIComponent(source("data.js"))}`);
+const native = await import(`data:text/javascript,${encodeURIComponent(source("native.js"))}`);
 const { KEY, stateOf, adopt, updateProject, moveProject, removeProject, liveSpace, machineReady, launchArgs } = data;
 const p = (id = "a", machine = null) => ({ id, name: `Project ${id}`, folder: `/projects/${id}`, machine, space: `s-${id}`, color: "ansi6" });
 const s = (id = "a", machine = null) => ({ id: `s-${id}`, name: `live ${id}`, folder: "/old", machine, active: id === "a", tabs: [{ id: `t-${id}`, active: true }] });
@@ -32,9 +33,9 @@ const text = el => el && typeof el === "object" ? el.childNodes.map(text).join("
 function fixture(initial = state(), initialSpaces = [s()]) {
   let saved = plain(initial), sp = plain(initialSpaces), focus = { space: sp[0]?.id, tab: sp[0]?.tabs[0]?.id, pane: "pane" };
   let ms = [{ name: null, layout: "ready" }, { name: "remote", layout: "ready" }];
-  const calls = [], overlays = [], notices = [], tree = { id: "root", children: [{ id: "project-workspace", active: "main" }, { id: "panel", hidden: true }] };
-  const context = { ...data, View: class {}, div: element, svg: element, h_flex: element, v_flex: element,
-    seeds: {}, shared: key => key === KEY ? saved : {}, read: () => saved, write: next => { saved = next; },
+  const calls = [], overlays = [], notices = [], sharedValues = {}, tree = { id: "root", children: [{ id: "project-workspace", active: "main" }, { id: "panel", hidden: true }] };
+  const context = { ...data, ...native, View: class {}, div: element, svg: element, h_flex: element, v_flex: element,
+    seeds: {}, shared: key => key === KEY ? saved : sharedValues[key], setShared: (key, value) => { sharedValues[key] = value; }, read: () => saved, write: next => { saved = next; },
     props: () => ({}), spaces: () => sp, machines: () => ms, agents: () => [], focused: () => focus,
     theme: () => ({ foreground: "#ffffff", muted: "#999999", dim: "#777777" }), layout: () => tree,
     localStorage: { getItem: () => null, setItem() {} },
@@ -52,9 +53,152 @@ function fixture(initial = state(), initialSpaces = [s()]) {
   vm.runInNewContext(source("main.js").replace(/^import .*;\n/gm, "").replace("export default class", "class") + "\nthis.Panel = Projects;", context);
   const panel = new context.Panel();
   Object.assign(panel, { closed: false, machineNames: [], machineSignature: JSON.stringify(ms), folded: new Set(), nativeFocus: JSON.stringify([focus.space, focus.tab, focus.pane]) });
-  return { panel, context, calls, overlays, notices, tree, get saved() { return saved; }, setSpaces: next => { sp = next; }, setMachines: next => { ms = next; }, setFocus: next => { focus = next; } };
+  return { panel, context, calls, overlays, notices, sharedValues, tree, get saved() { return saved; }, setSpaces: next => { sp = next; }, setMachines: next => { ms = next; }, setFocus: next => { focus = next; } };
 }
 const cx = { notify() {}, stop_propagation() {} };
+
+function nativeJobs(f) {
+  const jobs = [], context = { ...cx, spawn: fn => { jobs.push(fn(context)); } };
+  f.sharedValues["trin.projects.native-spaces"] = true;
+  return { context, async drain() {
+    for (let i = 0; i < jobs.length; i++) {
+      assert.ok(i < 30, "reconciliation must be bounded, not a retry loop");
+      await jobs[i];
+    }
+  } };
+}
+
+test("native planner requests empty spaces, synchronizes names/order and never crosses machines", () => {
+  const st = state([p("a"), p("b"), p("empty", "remote"), p("c", "remote"), p("d", "remote")]);
+  const sp = [{ ...s("b"), name: "Project b" }, { ...s("a"), name: "Old name" },
+    { ...s("d", "remote"), name: "Project d" }, { ...s("c", "remote"), name: "Project c" }];
+  const ms = [{ name: null, layout: "ready" }, { name: "remote", layout: "ready" }];
+  const plan = native.nativeActions(st, sp, ms);
+  assert.ok(plan.some(a => a.kind === "create" && a.project === "empty"));
+  assert.deepEqual(plan.find(a => a.kind === "rename"), { kind: "rename", project: "a", id: "s-a", name: "Project a" });
+  assert.deepEqual(plan.filter(a => a.kind === "move"), [{ kind: "move", id: "s-a", index: 1 }, { kind: "move", id: "s-c", index: 3 }]);
+  assert.deepEqual(native.nativeActions(st, [], [{ name: null, layout: "loading" }, { name: "remote", layout: "unavailable" }]), []);
+});
+
+test("mirroring is opt-in and creates background shells once despite a delayed native snapshot", async () => {
+  const f = fixture(state([p(), p("b", "remote")]), []);
+  f.panel.sync(cx); assert.equal(f.calls.filter(c => c.exec).length, 0);
+  let count = 0;
+  f.context.exec = async (_cmd, args) => { f.calls.push({ exec: args }); return { code: 0, stdout: JSON.stringify({ space: "created-" + ++count }) }; };
+  const jobs = nativeJobs(f); f.panel.sync(jobs.context); await jobs.drain();
+  const creates = f.calls.filter(c => c.exec?.[1] === "space.new");
+  assert.equal(creates.length, 2);
+  for (const [i, call] of creates.entries()) {
+    const args = JSON.parse(call.exec[2]);
+    assert.equal(args.focus, false); assert.equal(args.argv, undefined);
+    assert.equal(args.folder, i ? "/projects/b" : "/projects/a");
+    assert.equal(args.machine, i ? "remote" : "");
+  }
+  assert.equal(f.saved.selected, "a");
+  assert.ok(f.saved.projects.every(p => p.pending.createdSpace));
+  const unrelated = adopt(f.saved, [{ id: "other-space", name: "Project a", machine: null, folder: "/projects/a" }]);
+  assert.equal(unrelated.projects[0].space, "created-1");
+  assert.ok(unrelated.projects[0].pending);
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(count, 2);
+  // Exact acknowledged ID is stronger than a shell's normalized cwd.
+  f.setSpaces(f.saved.projects.map(p => ({ id: p.space, name: p.name, machine: p.machine, folder: "/resolved/symlink", tabs: [] })));
+  f.panel.sync(jobs.context); await jobs.drain();
+  assert.ok(f.saved.projects.every(p => !p.pending)); assert.equal(count, 2);
+  assert.equal(f.saved.projects.length, 2);
+});
+
+test("a failed mirror request is durable and never spawns duplicate shells on redraw/reload", async () => {
+  const f = fixture(state(), []); let count = 0;
+  f.context.exec = async () => { count++; return { code: 1, stdout: '{"error":"folder missing"}' }; };
+  const jobs = nativeJobs(f); f.panel.sync(jobs.context); await jobs.drain();
+  assert.equal(count, 1); assert.equal(f.saved.projects[0].pending.failed, true);
+  f.panel.mirrorSignature = null;
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(count, 1);
+  assert.equal(f.notices.length, 1);
+});
+
+test("mirror stops publishing after close and adopts a late acknowledged Space on reload", async () => {
+  const f = fixture(state(), []); let finish;
+  f.context.exec = () => new Promise(resolve => { finish = resolve; });
+  const jobs = nativeJobs(f); f.panel.sync(jobs.context);
+  f.panel.close(); finish({ code: 0, stdout: '{"space":"late"}' }); await jobs.drain();
+  assert.equal(f.saved.projects[0].space, "s-a"); assert.ok(f.saved.projects[0].pending);
+  const recovered = adopt(f.saved, [{ id: "late", machine: null, name: "Project a", folder: "/projects/a" }]);
+  assert.equal(recovered.projects[0].space, "late"); assert.equal(recovered.projects[0].pending, null);
+});
+
+test("one mirror command stays in flight and disabling does not launch the rest of the queue", async () => {
+  const f = fixture(state([p(), p("b")]), []); let finish, count = 0;
+  f.context.exec = () => { count++; return new Promise(resolve => { finish = resolve; }); };
+  const jobs = nativeJobs(f); f.panel.sync(jobs.context);
+  for (let i = 0; i < 10; i++) f.panel.sync(jobs.context);
+  assert.equal(count, 1);
+  await f.panel.act("disable-native-spaces", jobs.context);
+  finish({ code: 0, stdout: '{"space":"first-only"}' }); await jobs.drain();
+  assert.equal(count, 1);
+  assert.equal(f.sharedValues["trin.projects.native-spaces"], false);
+  assert.equal(f.saved.projects[1].pending, undefined);
+});
+
+test("mirroring restores a closed last Space but does not create work on an offline machine", async () => {
+  const f = fixture(state(), [{ ...s(), name: "Project a" }]), jobs = nativeJobs(f);
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(f.calls.filter(c => c.exec).length, 0);
+  f.setSpaces([]); f.setMachines([{ name: null, layout: "unavailable" }]);
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(f.calls.filter(c => c.exec).length, 0);
+  f.setMachines([{ name: null, layout: "ready" }]);
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(f.calls.filter(c => c.exec?.[1] === "space.new").length, 1);
+});
+
+test("mirror rename/order failures have no busy retry and a later intent replans", async () => {
+  const f = fixture(), jobs = nativeJobs(f); let count = 0;
+  f.context.exec = async () => { count++; return { code: 1, stdout: '{"error":"disconnected"}' }; };
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(count, 1);
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(count, 1);
+  f.context.write(updateProject(f.saved, "a", { name: "New intent" }));
+  f.panel.sync(jobs.context); await jobs.drain(); assert.equal(count, 2);
+});
+
+test("project drag has an insertion line and exact before/after placement in wide and rail views", () => {
+  for (const rail of [false, true]) for (const after of [false, true]) {
+    const f = fixture(state([p(), p("b"), p("c")]));
+    f.panel.row(f.saved.projects[0], {}, rail).handlers["on_mouse_down:left"]({ position: { x: 10, y: 5 } }, cx);
+    f.panel.row(f.saved.projects[1], {}, rail).handlers.on_mouse_move({ position: { x: 10, y: 35 }, local_position: { y: after ? 25 : 5 }, bounds: { height: 30 } }, cx);
+    const target = f.panel.row(f.saved.projects[1], {}, rail);
+    const line = byID(target, "project-drop-b"); assert.ok(line);
+    assert.equal(line.attrs[after ? "bottom" : "top"][0], 0);
+    target.handlers["on_mouse_up:left"]({}, cx);
+    assert.deepEqual(f.saved.projects.map(p => p.id), after ? ["b", "a", "c"] : ["a", "b", "c"]);
+    assert.equal(f.saved.selected, "a");
+  }
+});
+
+test("project drag rejects cross-machine targets, removed IDs and outside releases", () => {
+  for (const mode of ["machine", "removed", "outside"]) {
+    const f = fixture(state([p(), p("b", mode === "machine" ? "remote" : null)]));
+    f.panel.row(f.saved.projects[0], {}, false).handlers["on_mouse_down:left"]({ position: { x: 0, y: 0 } }, cx);
+    const target = f.panel.row(f.saved.projects[1], {}, false);
+    target.handlers.on_mouse_move({ position: { x: 0, y: 40 } }, cx);
+    if (mode === "removed") f.context.write(removeProject(f.saved, "a"));
+    if (mode === "outside") f.panel.cancelProjectDrag(cx);
+    const before = f.saved;
+    target.handlers["on_mouse_up:left"]({}, cx);
+    assert.equal(f.saved, before);
+  }
+});
+
+test("removing a mirrored project requires explicit destructive confirmation and closes only its Space", async () => {
+  const f = fixture(state(), [{ ...s(), name: "Project a" }]), jobs = nativeJobs(f);
+  await f.panel.act("confirm-remove--a", jobs.context); await jobs.drain();
+  const dialog = f.overlays[0].props;
+  assert.match(dialog.detail, /ВСЕ сессии/); assert.equal(dialog.command.name, "trin-projects.remove-native--a");
+  assert.equal(f.calls.filter(c => c.exec).length, 0);
+  await assert.rejects(f.panel.act("remove--a", jobs.context));
+  await f.panel.act("remove-native--a", jobs.context); await jobs.drain();
+  const close = f.calls.find(c => c.exec?.[1] === "space.close");
+  assert.deepEqual(JSON.parse(close.exec[2]), { id: "s-a", confirmed: true });
+  assert.equal(f.saved.projects.length, 0);
+  assert.deepEqual(f.saved.ignored, ["s-a"]);
+});
 
 test("project registry survives closing every session and changing all terminal cwd/name facts", () => {
   const original = state();
@@ -96,17 +240,47 @@ test("launch arguments enforce an explicit root/machine, even for home/global pr
 });
 test("new tabs in existing spaces always pass project root, not live folder", async () => {
   const f = fixture(); await f.panel.newTab();
-  const call = f.calls.find(c => c.name === "tab.new");
-  assert.deepEqual(plain(call.args), { space: "s-a", folder: "/projects/a" });
-  assert.equal(f.calls.filter(c => c.exec).length, 0);
+  const call = f.calls.find(c => c.exec?.[1] === "tab.new");
+  assert.deepEqual(JSON.parse(call.exec[2]), { argv: ["opencode", "--auto"], space: "s-a", folder: "/projects/a" });
+  const move = f.calls.find(c => c.exec?.[1] === "tab.move");
+  assert.deepEqual(JSON.parse(move.exec[2]), { id: "new-tab", index: 2147483647 });
 });
 test("an empty project launches once through acknowledged CLI IDs without a dummy tab", async () => {
   const f = fixture(state(), []); await f.panel.newTab();
   const args = f.calls.find(c => c.exec).exec;
   assert.equal(args[1], "space.new");
-  assert.deepEqual(JSON.parse(args[2]), { name: "Project a", folder: "/projects/a", machine: "" });
+  assert.deepEqual(JSON.parse(args[2]), { name: "Project a", folder: "/projects/a", machine: "", argv: ["opencode", "--auto"] });
   assert.equal(f.saved.projects[0].space, "created");
   assert.equal(f.saved.projects.length, 1);
+});
+test("append targets only acknowledged IDs, never retries a failed create or moves after close", async () => {
+  for (const mode of ["failure", "missing-id", "close", "move-failure"]) {
+    const f = fixture(), seen = [];
+    f.context.exec = async (_cmd, args) => {
+      seen.push(args[1]);
+      if (args[1] === "tab.move") return { code: 1, stdout: '{}' };
+      if (mode === "close") f.panel.close();
+      return mode === "failure" ? { code: 1, stdout: '{"error":"failed"}' }
+        : { code: 0, stdout: mode === "missing-id" ? '{}' : '{"tab":"exact-id"}' };
+    };
+    if (mode === "close") await f.panel.newTab();
+    else await assert.rejects(f.panel.newTab());
+    assert.deepEqual(seen, mode === "move-failure" ? ["tab.new", "tab.move"] : ["tab.new"]);
+  }
+});
+test("new session and plain terminal route to the chosen project on local/remote, empty/live spaces", async () => {
+  for (const machine of [null, "remote"]) for (const existing of [false, true]) for (const action of ["new-tab", "new-terminal"]) {
+    const f = fixture(state([p("a", machine)]), existing ? [s("a", machine)] : []);
+    const jobs = [], context = { ...cx, spawn: fn => { jobs.push(fn(context)); } };
+    await f.panel.act(`${action}--a`, context); await Promise.all(jobs);
+    const call = f.calls.find(c => c.exec?.[1] === (existing ? "tab.new" : "space.new"));
+    const args = JSON.parse(call.exec[2]);
+    assert.equal(args.folder, "/projects/a");
+    assert.deepEqual(args.argv, action === "new-tab" ? ["opencode", "--auto"] : undefined);
+    if (existing) assert.equal(args.space, "s-a");
+    else assert.equal(args.machine, machine ?? "");
+    assert.equal(f.notices.length, 0);
+  }
 });
 test("first agent session keeps the project name and passes a separate initial tab name", async () => {
   const f = fixture(state(), []); await f.panel.newTab("a", { name: "Agent", argv: ["agent"] });
@@ -211,7 +385,8 @@ test("project rail uses permanent avatar/color and selecting an empty project do
   const f = fixture(state([p(), p("b")]), [s()]);
   const row = f.panel.row(f.saved.projects[1], {}, true);
   assert.equal(text(row), "P"); assert.match(row.attrs.tooltip[0], /\/projects\/b/);
-  row.handlers.on_click(); assert.equal(f.saved.selected, "b"); assert.equal(f.calls.filter(c => c.exec).length, 0);
+  row.handlers["on_mouse_down:left"]({}, cx); row.handlers["on_mouse_up:left"]({}, cx);
+  assert.equal(f.saved.selected, "b"); assert.equal(f.calls.filter(c => c.exec).length, 0);
 });
 test("project picker/menu commands encode IDs without the reserved command argument colon", async () => {
   const f = fixture(); await f.panel.act("select--" + encodeURIComponent("a"), cx);
@@ -221,7 +396,7 @@ test("project picker/menu commands encode IDs without the reserved command argum
 test("project UI uses retained inputs, offline gating, local picker and explicit delete confirmation", () => {
   const ui = source("ui.js") + source("form.js");
   assert.match(ui, /InputState.new/); assert.match(ui, /pickFolder/); assert.match(ui, /confirm-remove/);
-  assert.match(ui, /available && !s/); assert.match(ui, /surface !== "empty"/);
+  assert.match(ui, /available && \(!s \|\| shared\("trin\.projects\.native-spaces"\)/); assert.match(ui, /surface !== "empty"/);
   assert.doesNotMatch(source("main.js"), /timer\.every|watchFolder|gitTail|git.*status/);
 });
 
@@ -255,6 +430,7 @@ test("only the always-visible status surface consumes commands, including with h
 test("all project hotkeys are scoped to trin and cover empty-context safety", () => {
   const keys = JSON.parse(fs.readFileSync(new URL("../keys.json", import.meta.url), "utf8"));
   assert.deepEqual(Object.keys(keys), ["layout:trin"]);
+  assert.equal(keys["layout:trin"]["cmd-shift-t"], "trin-projects.new-terminal");
   for (const key of ["cmd-t", "cmd-w", "cmd-shift-w", "cmd-d", "cmd-shift-d", "ctrl-tab", "cmd-1", "ctrl-1", "cmd-p"]) assert.match(keys["layout:trin"][key], /^trin-projects\./);
   const layout = JSON.parse(fs.readFileSync(new URL("../layouts/trin.json", import.meta.url), "utf8"));
   const walk = n => [n, ...(n.children ?? []).flatMap(walk)];
@@ -277,7 +453,7 @@ function surfaceFixture(surface, projectID = null) {
       const input = { value: () => value, set_value: next => { value = next; }, on() {}, focus() {} };
       inputs.push(input); return input;
     } },
-    props: () => properties, read: () => saved, write: next => { saved = next; },
+    props: () => properties, shared: () => undefined, read: () => saved, write: next => { saved = next; },
     current: () => saved.projects.find(p => p.id === saved.selected), target: () => saved.projects.find(p => p.id === properties.project),
     live: () => undefined, ready: () => true, agents: () => [], window: () => ({ platform: "macos" }), keys: () => [],
     theme: () => ({ foreground: "#ffffff", muted: "#999999", dim: "#777777" }),
@@ -298,6 +474,16 @@ test("new-project form saves permanent identity without creating any terminal", 
   const created = f.saved.projects[1]; assert.equal(created.name, "Global"); assert.equal(created.folder, "/Users/global"); assert.equal(created.space, null);
   assert.equal(f.commands.length, 1); assert.equal(f.commands[0].action, "select");
 });
+test("mirror-mode form discloses its background shell and the live project removal offers confirmation", () => {
+  const form = surfaceFixture("form"); form.context.shared = () => true;
+  assert.match(text(form.render()), /Родной Space с обычным терминалом/);
+  assert.match(text(form.render()), /без OpenCode/);
+  const menu = surfaceFixture("menu", "a"); menu.context.shared = () => true; menu.context.live = () => s();
+  const remove = byID(menu.render(), "project-menu-remove");
+  assert.match(text(remove), /Удалить проект и Space/);
+  remove.handlers.on_click({}, menu.cx);
+  assert.deepEqual(menu.commands[0], { action: "confirm-remove", id: "a" });
+});
 test("editing a project changes its fixed name/root but preserves native session binding", () => {
   const f = surfaceFixture("form", "a"); f.view.name.set_value("Fixed"); f.view.folder.set_value("/new-root");
   byID(f.render(), "project-form-save").handlers.on_click({}, f.cx);
@@ -315,6 +501,15 @@ test("empty-project workspace shows its own root and never steals keyboard focus
   const f = surfaceFixture("empty"); const root = f.render();
   assert.match(text(root), /Project a/); assert.match(text(root), /\/projects\/a/);
   byID(root, "project-start").handlers.on_click(); assert.equal(f.commands[0].action, "new-tab");
+});
+test("project menu starts OpenCode directly while the explicit shell picker stays a shell", () => {
+  const menu = surfaceFixture("menu", "a");
+  byID(menu.render(), "project-menu-new").handlers.on_click();
+  assert.deepEqual(menu.commands[0], { action: "new-tab", id: "a" });
+  assert.ok(byID(menu.render(), "project-menu-agents"));
+  const picker = surfaceFixture("agents", "a");
+  byID(picker.render(), "project-shell").handlers.on_click();
+  assert.deepEqual(picker.commands[0], { action: "new-terminal", id: "a" });
 });
 test("project picker includes empty projects and preserves their IDs on selection", () => {
   const f = surfaceFixture("picker"), root = f.render();

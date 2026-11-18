@@ -1,5 +1,18 @@
 # Публичный журнал
 
+## 2026-11-18 — сохранение Mac WIP в отдельной ветке
+
+- В `wip/mac-local-2026-11` сохранены Dock badge/provider SVG (`trin-agents`),
+  Projects→Spaces с `native.js`, запуск OpenCode/терминала и точный append вкладок
+  (`trin-projects`, keys), drag/кнопки/минимальные заголовки (`trin-tabs`).
+  Доработки объединены из-за общих файлов и тестов Projects/navigation/rail.
+- README и layout AGENTS описывают поведение/ограничения. Квоты, API-учёт,
+  backend и их тесты оставлены из main; старые snapshots документации не заменяют
+  новые записи. Ветка не устанавливается и не вливается в main.
+- Проверено: 232 layout JS-теста, 70 Python-тестов, native check Tabs/Agents/Projects,
+  privacy gate (193 файла, findings=0), независимый Gitleaks и diff-check.
+  Live GUI/reconnect здесь не проверяются; установленная раскладка не меняется.
+
 ## 2026-11-18 — пятая строка подписок и OpenCode Go
 
 - `layout/trin/layouts/trin.json`: блок квот 180px вместо 152px, чтобы пять

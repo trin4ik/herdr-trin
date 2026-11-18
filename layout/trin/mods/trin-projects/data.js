@@ -11,7 +11,8 @@ export function stateOf(value) {
     if (!p || typeof p.id !== "string" || ids.has(p.id) || typeof p.name !== "string" || typeof p.folder !== "string"
       || (p.machine !== null && typeof p.machine !== "string") || (p.space !== null && typeof p.space !== "string")) throw new Error("Повреждён реестр Projects. Данные не перезаписаны.");
     if (p.pending && (!Number.isFinite(p.pending.at) || typeof p.pending.name !== "string" || typeof p.pending.folder !== "string"
-      || !Array.isArray(p.pending.before) || p.pending.before.some(id => typeof id !== "string"))) throw new Error("Повреждена запись запуска Projects. Данные не перезаписаны.");
+      || !Array.isArray(p.pending.before) || p.pending.before.some(id => typeof id !== "string")
+      || (p.pending.createdSpace != null && typeof p.pending.createdSpace !== "string"))) throw new Error("Повреждена запись запуска Projects. Данные не перезаписаны.");
     ids.add(p.id);
   }
   return value;
@@ -36,6 +37,13 @@ export function adopt(state, sp, seeds = {}, colors = {}, now = Date.now()) {
   const projects = state.projects.map(p => {
     if (!p.pending) return p;
     const request = p.pending;
+    if (request.createdSpace) {
+      if (sp.some(s => s.id === request.createdSpace && (s.machine ?? null) === p.machine)) {
+        changed = true;
+        return { ...p, space: request.createdSpace, pending: null };
+      }
+      return p; // An acknowledged ID must never fall back to name/cwd guessing.
+    }
     const matches = sp.filter(s => !request.before.includes(s.id) && s.name === request.name && s.folder === request.folder
       && (s.machine ?? null) === p.machine && !state.projects.some(other => other.id !== p.id && other.space === s.id));
     if (matches.length === 1) { changed = true; return { ...p, space: matches[0].id, pending: null }; }
@@ -58,13 +66,13 @@ export function updateProject(state, id, patch) {
   return { ...state, projects: state.projects.map(p => p.id === id ? { ...p, ...patch, id: p.id, machine: p.machine } : p) };
 }
 
-export function moveProject(state, source, target) {
+export function moveProject(state, source, target, after = null) {
   const a = state.projects.find(p => p.id === source), b = state.projects.find(p => p.id === target);
   if (!a || !b || a.machine !== b.machine || a === b) return state;
   const projects = state.projects.filter(p => p.id !== source);
   const to = projects.findIndex(p => p.id === target);
   const before = state.projects.indexOf(a) > state.projects.indexOf(b);
-  projects.splice(to + (before ? 0 : 1), 0, a);
+  projects.splice(to + (after == null ? (before ? 0 : 1) : after ? 1 : 0), 0, a);
   return { ...state, projects };
 }
 
