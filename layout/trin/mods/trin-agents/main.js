@@ -26,7 +26,6 @@ function toggleSidebar() {
   const collapsed = narrow();
   if (!collapsed) setShared("sidebar.width", width);
   run("layout.resize", { id: "sidebar", px: collapsed ? (shared("sidebar.width") ?? 268) : 44 });
-  run("layout.resize", { id: "quotas", px: collapsed ? 152 : 180 });
 }
 
 // Match session tabs: an explicit tab name wins, otherwise use the live title.

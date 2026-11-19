@@ -56,7 +56,7 @@ test("header says Deliva and preserves full-color image proportions", () => {
   assert.equal(mark.attrs.rounded, undefined);
   assert.equal(root.attrs.pl[0], 76);
 });
-test("search opens Projects and sidebar retains its original resizing commands", () => {
+test("search opens Projects and collapsing the sidebar only changes its width", () => {
   const { panel, commands, stored } = fixture(), root = panel.render();
   nodes(root).find(n => n.attrs.id?.[0] === "search").handlers.click();
   assert.equal(commands[0].name, "trin-projects.picker");
@@ -64,10 +64,9 @@ test("search opens Projects and sidebar retains its original resizing commands",
   assert.ok(icons.includes("mods/workspace-chrome/search.svg"));
   assert.ok(icons.includes("mods/workspace-chrome/sidebar.svg"));
   nodes(root).find(n => n.attrs.id?.[0] === "sidebar-toggle").handlers.click();
-  assert.equal(commands[1].name, "layout.resize");
-  assert.equal(commands[1].args.px, 44);
-  assert.equal(commands[2].args.id, "quotas");
-  assert.equal(commands[2].args.px, 180);
+  assert.deepEqual(commands.map(({ name, args }) => [name, args?.id, args?.px]), [
+    ["trin-projects.picker", undefined, undefined], ["layout.resize", "sidebar", 44],
+  ]);
   assert.equal(stored["sidebar.width"], 268);
 });
 test("macOS rail keeps traffic-light space clear", () => {

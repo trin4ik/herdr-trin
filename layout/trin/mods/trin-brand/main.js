@@ -22,7 +22,6 @@ function toggleSidebar() {
   // Mods edited before the rail went by width still read the flag.
   setShared("sidebar.collapsed", !collapsed);
   run("layout.resize", { id: "sidebar", px: collapsed ? (shared("sidebar.width") ?? 268) : 44 });
-  run("layout.resize", { id: "quotas", px: collapsed ? 152 : 180 });
 }
 
 export default class WorkspaceChrome extends View {

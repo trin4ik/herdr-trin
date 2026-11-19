@@ -22,42 +22,51 @@
           "window_drag": true
         },
         {
-          "id": "sidebar-lists",
+          "id": "sidebar-body",
           "type": "column",
+          "resizable": true,
           "children": [
             {
-              "id": "spaces",
-              "type": "block",
-              "content": {
-                "mod": "trin-projects"
-              },
-              "size": {
-                "weight": 1
-              },
-              "min": 90
+              "id": "sidebar-lists",
+              "type": "column",
+              "min": 180,
+              "children": [
+                {
+                  "id": "spaces",
+                  "type": "block",
+                  "content": {
+                    "mod": "trin-projects"
+                  },
+                  "size": {
+                    "weight": 1
+                  },
+                  "min": 90
+                },
+                {
+                  "id": "agents",
+                  "type": "block",
+                  "content": {
+                    "mod": "trin-agents"
+                  },
+                  "size": {
+                    "weight": 1
+                  },
+                  "min": 90
+                }
+              ]
             },
             {
-              "id": "agents",
+              "id": "quotas",
               "type": "block",
               "content": {
-                "mod": "trin-agents"
+                "mod": "trin-quotas"
               },
               "size": {
-                "weight": 1
+                "px": 180
               },
-              "min": 90
+              "min": 120
             }
           ]
-        },
-        {
-          "id": "quotas",
-          "type": "block",
-          "content": {
-            "mod": "trin-quotas"
-          },
-          "size": {
-            "px": 180
-          }
         },
         {
           "id": "sidebar-footer",

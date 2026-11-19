@@ -128,11 +128,14 @@ test("agent rail uses project squares, state indicators and full session tooltip
   }
   assert.ok(text(byID(root, "ag-t2")).includes("!"));
   assert.ok(nodes(byID(root, "ag-t3")).some(n => n.attrs.size?.[0] === 12 && n.attrs.text_color?.[0] === "#101112"));
-  byID(root, "collapse").handlers.on_click();
-  assert.equal(commands.at(-2).args.id, "sidebar");
-  assert.equal(commands.at(-2).args.px, 268);
-  assert.equal(commands.at(-1).args.id, "quotas");
-  assert.equal(commands.at(-1).args.px, 152);
+});
+
+test("expanding the sidebar from the Agents rail preserves the quota height", () => {
+  const { panel, commands } = fixture();
+  byID(panel.render(), "collapse").handlers.on_click();
+  assert.deepEqual(commands.map(({ name, args }) => [name, args.id, args.px]), [
+    ["layout.resize", "sidebar", 268],
+  ]);
 });
 
 test("Agents uses the same provider assets as subscriptions, retaining unknown-provider fallback", () => {

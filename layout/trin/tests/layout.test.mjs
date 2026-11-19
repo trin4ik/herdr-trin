@@ -37,11 +37,20 @@ test("layout uses implemented custom mods and explicitly known built-ins", () =>
   for (const name of custom) assert.ok(used.has(name), `${name} is missing from the layout`);
 });
 
-test("compact quota block sits outside the Spaces/Agents split, immediately above Settings", () => {
+test("native quota divider moves independently of the Spaces/Agents split and fixed chrome", () => {
   const sidebar = nodes(layout).find(n => n.id === "sidebar");
-  const ids = sidebar.children.map(n => n.id);
-  assert.deepEqual(ids.slice(-3), ["sidebar-lists", "quotas", "sidebar-footer"]);
-  const quota = sidebar.children.find(n => n.id === "quotas");
+  assert.deepEqual(sidebar.children.map(n => n.id), ["brand", "sidebar-body", "sidebar-footer"]);
+  assert.equal(sidebar.resizable, false);
+  const body = sidebar.children[1];
+  assert.equal(body.type, "column");
+  assert.equal(body.resizable, true);
+  assert.deepEqual(body.children.map(n => n.id), ["sidebar-lists", "quotas"]);
+  const [lists, quota] = body.children;
+  assert.deepEqual(lists.children.map(n => n.id), ["spaces", "agents"]);
+  assert.notEqual(lists.resizable, false);
+  assert.equal(lists.size?.px, undefined, "only quotas use fixed pixels in the split");
+  assert.ok(lists.min >= lists.children.reduce((sum, n) => sum + n.min, 0));
+  assert.ok(quota.min > 0 && quota.min < quota.size.px);
   assert.equal(quota.size.px, 180, "block fits five quota subscriptions including OpenCode Go");
   assert.equal(quota.content.mod, "trin-quotas");
 });
