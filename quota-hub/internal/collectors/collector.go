@@ -27,6 +27,11 @@ func New(spec Spec, opts Options) (Collector, error) {
 		return def, nil
 	}
 	switch {
+	case spec.Provider == ProviderClaude && spec.Source == SourceClaudeProxy:
+		if spec.IntegrationID == "" || spec.IntegrationID == "anthropic" || spec.ClaudeProxyURL == "" || spec.ClaudeProxyTokenEnv == "" {
+			return nil, fail(CodeConfigInvalid)
+		}
+		return &claudeProxyCollector{base: b}, nil
 	case spec.Provider == ProviderCodex && spec.Source == SourceNativeCodexOAuth:
 		if spec.CredentialFile == "" {
 			return nil, fail(CodeConfigInvalid)

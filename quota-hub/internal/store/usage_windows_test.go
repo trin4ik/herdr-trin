@@ -15,9 +15,14 @@ func TestUsageFieldsPersistAndCopy(t *testing.T) {
 	provider, modelID := "anthropic", "fable"
 	definitions := defs()
 	definitions[0].OpenCodeProvider = &provider
+	definitions[0].DisplayName = "Claude Proxy A"
+	definitions[0].VerifiedPlan = "pro"
 	s, err := Open(dir, definitions)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if sub := s.Snapshot(t0).Subscriptions[0]; sub.Plan == nil || *sub.Plan != "pro" || sub.AccountEmail != nil {
+		t.Fatalf("configured plan must be independent of measured quota and email: %+v", sub)
 	}
 	r := result(t0, 20)
 	r.Quotas[0].Model = &modelID
@@ -26,15 +31,18 @@ func TestUsageFieldsPersistAndCopy(t *testing.T) {
 	}
 	sub := s.Snapshot(t0).Subscriptions[0]
 	if sub.OpenCodeProvider == nil || *sub.OpenCodeProvider != provider ||
+		sub.DisplayName == nil || *sub.DisplayName != "Claude Proxy A" ||
 		sub.Quotas[0].Model == nil || *sub.Quotas[0].Model != modelID {
 		t.Fatalf("%+v", sub)
 	}
 	wire, err := json.Marshal(s.Snapshot(t0))
 	if err != nil || !strings.Contains(string(wire), `"opencode_provider":"anthropic"`) ||
+		!strings.Contains(string(wire), `"display_name":"Claude Proxy A"`) || !strings.Contains(string(wire), `"plan":"pro"`) ||
 		!strings.Contains(string(wire), `"model":"fable"`) {
 		t.Fatalf("%s %v", wire, err)
 	}
 	*sub.OpenCodeProvider, *sub.Quotas[0].Model = "changed", "changed"
+	*sub.DisplayName = "changed"
 	s.Close()
 	s, err = Open(dir, definitions)
 	if err != nil {
@@ -43,6 +51,7 @@ func TestUsageFieldsPersistAndCopy(t *testing.T) {
 	defer s.Close()
 	sub, _ = s.Get("claude")
 	if sub.OpenCodeProvider == nil || *sub.OpenCodeProvider != provider ||
+		sub.DisplayName == nil || *sub.DisplayName != "Claude Proxy A" ||
 		sub.Quotas[0].Model == nil || *sub.Quotas[0].Model != modelID {
 		t.Fatalf("%+v", sub)
 	}

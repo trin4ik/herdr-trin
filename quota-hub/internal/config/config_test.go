@@ -59,6 +59,63 @@ func TestOpenCodeGoRemoteOnlyMigration(t *testing.T) {
 	}
 }
 
+func TestClaudeProxyContainersHaveIndependentUsageIdentity(t *testing.T) {
+	c := valid(t)
+	first := Subscription{ID: "claude-a", Provider: "claude", Enabled: true, Source: "claude_proxy",
+		IntegrationID: "claude-container-a", RemoteURL: "https://proxy-a.example.com/v1/subscription-limits",
+		TokenEnv: "CLAUDE_PROXY_A_TOKEN", DisplayName: "Claude Container A", VerifiedPlan: "pro"}
+	second := Subscription{ID: "claude-b", Provider: "claude", Enabled: true, Source: "claude_proxy",
+		IntegrationID: "claude-container-b", RemoteURL: "https://proxy-b.example.com/v1/subscription-limits",
+		TokenEnv: "CLAUDE_PROXY_B_TOKEN", DisplayName: "Claude Container B"}
+	c.Subscriptions = []Subscription{first, second}
+	specs, err := c.Specs()
+	if err != nil || len(specs) != 2 {
+		t.Fatalf("Specs: %+v %v", specs, err)
+	}
+	for i, want := range []string{"claude-container-a", "claude-container-b"} {
+		s := specs[i]
+		if s.DisplayName != []string{"Claude Container A", "Claude Container B"}[i] ||
+			s.Provider != "claude" || s.Product != "claude_subscription" ||
+			s.Source != "claude_proxy" || s.OpenCodeProvider == nil || *s.OpenCodeProvider != want {
+			t.Fatalf("wrong proxy identity: %+v", s.Definition)
+		}
+	}
+	if specs[0].VerifiedPlan != "pro" || specs[1].VerifiedPlan != "" {
+		t.Fatal("plan must be explicitly configured per instance")
+	}
+	c.Subscriptions[0].VerifiedPlan = "guessed"
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted unidentified plan")
+	}
+	c.Subscriptions[0] = first
+	for _, name := range []string{strings.Repeat("x", 61), "bad\nname", " padded "} {
+		c.Subscriptions[0].DisplayName = name
+		if _, err := c.Specs(); err == nil {
+			t.Fatalf("accepted display name %q", name)
+		}
+	}
+	c.Subscriptions = []Subscription{first, first}
+	c.Subscriptions[1].ID = "claude-a2"
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted duplicate proxy URL and integration_id")
+	}
+	c.Subscriptions = []Subscription{first, second}
+	c.Subscriptions[1].IntegrationID = first.IntegrationID
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted duplicate integration_id")
+	}
+	c.Subscriptions = []Subscription{first, second}
+	c.Subscriptions[1].RemoteURL = first.RemoteURL
+	c.Subscriptions[1].IntegrationID = "claude-container-c"
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted duplicate URL")
+	}
+	c.Subscriptions[0].IntegrationID = "anthropic"
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted anthropic integration_id")
+	}
+}
+
 func TestSpecsSeparateProvidersFromCredentialSources(t *testing.T) {
 	c := valid(t)
 	ss, err := c.Specs()

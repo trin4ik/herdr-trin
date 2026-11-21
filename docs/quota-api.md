@@ -124,3 +124,45 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
 `layout/trin/mods/trin-quotas/data.js`; backend model —
 `quota-hub/internal/model/model.go`. Optional дополнительные backend поля UI
 игнорирует. Ошибка HTTP/JSON/schema сохраняет last-good и показывает warning.
+
+## Claude proxy source
+
+Каждый независимый proxy/container задаётся отдельной включённой подпиской:
+
+```json
+{
+  "id": "claude-container-a",
+  "provider": "claude",
+  "source": "claude_proxy",
+  "integration_id": "claude-container-a",
+  "remote_url": "https://claude-proxy.example.com/v1/subscription-limits",
+  "token_env": "CLAUDE_PROXY_A_TOKEN",
+  "display_name": "Claude Container A",
+  "verified_plan": "pro"
+}
+```
+
+`integration_id` — уникальный безопасный идентификатор `[a-z0-9][a-z0-9_-]{0,63}`,
+не `anthropic`; URL и integration ID должны быть уникальны среди активных
+`claude_proxy` подписок. Bearer берётся из названной env-переменной: секрет не
+хранится в JSON. URL обязан быть HTTPS с точным путём `/v1/subscription-limits`.
+Для каждого ответа `instance_id` обязан совпадать с subscription `id`.
+
+Wire v1: `schema_version: 1`, `instance_id`, `status` (`ok` или `no_data`),
+`windows` и для `ok` — `observed_at`; каждое окно содержит безопасный `id`,
+обязательный `used_percent` (число 0..100 или null) и optional `reset_at`.
+Окна `five_hour` и `seven_day` получают соответствующие rolling periods;
+прочие безопасные IDs сохраняются как отдельные окна. В публичной квоте `id`
+окна совпадает с wire ID: уникальность обеспечивается парой subscription ID +
+quota ID. Ответ ограничен 256 KiB и 64 окнами, проверяются форма, timestamps,
+дубли ID окон и EOF JSON. Redirects запрещены.
+
+`no_data`, HTTP/network errors (включая 401) не становятся нулевой квотой и
+не запускают credential refresh; last-good остаётся со своей исходной свежестью.
+`display_name` — optional локальная подпись до 60 символов без control
+characters. `verified_plan` — optional локальная метка уже проверенного тарифа;
+публикуется как `plan`, даже до первого замера. Эти поля не определяют identity.
+`opencode_provider` равен
+`integration_id`, поэтому usage разных контейнеров не сливается с `anthropic`
+или друг с другом. Этот источник отдельный от старого Claude passive/native
+collector; старый источник и его семантика не меняются.

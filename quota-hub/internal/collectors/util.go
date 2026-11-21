@@ -47,6 +47,7 @@ const (
 	SourceOpenCodeKey      = "opencode_key"
 	SourceOpenCodeObserved = "opencode_observed"
 	SourceOpenCodeConsole  = "opencode_console"
+	SourceClaudeProxy      = "claude_proxy"
 
 	EndpointCodex    = "https://chatgpt.com/backend-api/wham/usage"
 	EndpointOllama   = "https://ollama.com/api/balance"

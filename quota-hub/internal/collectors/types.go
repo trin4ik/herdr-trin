@@ -65,6 +65,8 @@ type Spec struct {
 	ObserveInterval             time.Duration
 	ClaudeAccountFile           string
 	ClaudeExpectedAccountSHA256 string
+	ClaudeProxyURL              string
+	ClaudeProxyTokenEnv         string
 }
 
 // Options provides test seams. Production configuration cannot override upstream endpoints.
@@ -78,6 +80,8 @@ type Options struct {
 func (s Spec) UsageProvider() *string {
 	var provider string
 	switch {
+	case s.Provider == ProviderClaude && s.Source == SourceClaudeProxy:
+		provider = s.IntegrationID
 	case s.Provider == ProviderCodex && s.Source == SourceNativeCodexOAuth:
 		provider = "openai"
 	case s.Provider == ProviderClaude:

@@ -265,3 +265,9 @@
   установка не перепроверялись. Реальный provider smoke в Docker, macOS Keychain,
   Docker arm64 и Ollama/Kimi container networking не проверены; ограничения
   описаны. Удалённый рабочий сервис не изменялся. Commit/remote/push не выполнены.
+
+## quota-hub — источник Claude proxy
+
+- Добавлен отдельный read-only `claude_proxy` для нескольких независимых
+  контейнеров с уникальными integration_id и URL; upstream wire не менялся.
+- Документация контракта и ограничения добавлены в `docs/quota-api.md`.

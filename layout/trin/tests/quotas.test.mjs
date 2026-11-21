@@ -482,6 +482,20 @@ test("zero and unknown consumption both keep the track but do not invent a color
 // --- OpenCode Console -------------------------------------------------------
 const data = await import(`data:text/javascript,${encodeURIComponent(read("data.js"))}`);
 
+test("separate Claude instance keeps its own label and no fake percentage", () => {
+  const { subscriptions } = data.normalizeSnapshot({ schema_version: 1, generated_at: DEMO_NOW, subscriptions: [
+    { id: "claude-primary", provider: "claude", quotas: [] },
+    { id: "claude-us", display_name: "Claude US", provider: "claude", source: "claude_proxy", plan: "pro", quotas: [] },
+  ] });
+  assert.deepEqual(subscriptions.map(s => s.name), ["Claude", "Claude US"]);
+  assert.deepEqual(subscriptions[1].windows, []);
+  const { panel } = fixture();
+  assert.match(text(panel.row(subscriptions[1], {}, false)), /Claude US/);
+  panel.monitor.subscriptions = subscriptions;
+  panel.expanded = panel.revealed = "claude-us";
+  assert.equal(text(byID(panel.render(), "quota-account-claude-us")), "Anthropic · Pro");
+});
+
 const rawUsage = {
   calls: 807, cost_usd: 48.15, unpriced: 0, partial: false,
   input_tokens: 1200, output_tokens: 200, reasoning_tokens: 50, cache_read_tokens: 3000, cache_write_tokens: 100,

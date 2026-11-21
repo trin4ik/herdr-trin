@@ -132,6 +132,8 @@ export default class Quotas extends View {
 
     return h_flex().id(`quota-${subscription.id}`).h(28).flex_none().px(16).min_w(0).items_center()
       .child(this.providerIcon(subscription, t).mr(12))
+      .when(Boolean(subscription.displayName), el => el.child(
+        div().w(68).mr(8).flex_none().truncate().text_size(10.5).text_color(t.muted).child(subscription.displayName)))
       .child(this.meter(t, value).mr(12))
       .child(div().id(`quota-${subscription.id}-usage`).flex_none().text_right().font_family("JetBrains Mono").text_size(11)
         .text_color(value != null && value >= 60 ? quotaColor(t, value) : t.foreground).child(text));

@@ -8,6 +8,7 @@ Headless Go-сборщик → private last-good/history/cooldown → норма
 | --- | --- | --- |
 | Codex | Native `.codex/auth.json`, access token/account → usage GET | Не любой OpenCode token-sharing вход; expiry обновляет native CLI |
 | Claude | Passive headers + native usage GET; native `.claude/.credentials.json` | Keychain не читается; нативный GET даёт все окна, включая лимит по модели |
+| Claude proxy | Отдельный read-only HTTPS `/v1/subscription-limits` с выделенным Bearer | Нет данных/ошибка = unavailable или stale; секрет только в env |
 | Ollama | Active key `ollama-cloud` из OpenCode `/api/credential` | Нужен доступ к owning service |
 | Kimi | Active key явно выбранной `kimi-code-plan-cn` или `kimi-code-plan-global` | Не угадывать регион по имени аккаунта |
 | OpenCode Go | Credential `opencode` из OpenCode `/api/credential` → Go usage opencode.ai | Только платный allowance; сессия не обновляется |
@@ -69,6 +70,22 @@ services:
         bind:
           create_host_path: false
 ```
+
+Для каждого Claude-контейнера добавьте отдельную подписку как в
+`configs/example.json`: `provider: claude`, `source: claude_proxy`,
+уникальные `id` и безопасный `integration_id` (не `anthropic`), `remote_url` ровно HTTPS
+`/v1/subscription-limits`, `token_env` — имя env-переменной,
+`display_name` (опционально, до 60 символов без control characters).
+Необязательный `verified_plan` (например, `pro`) задавайте только по
+подтверждённому `claude auth status` этого контейнера; изменяйте при смене
+аккаунта/тарифа. Это метка, не вывод из процентов и не email.
+Имя локальное, не является идентичностью и публикуется как optional
+`display_name` в `/v1/quotas`. В JSON хранится только имя; задайте сам Bearer
+в окружении сервиса. Источник не читает SSH,
+Claude credentials или старый bridge. Ответ `no_data` и любые сетевые/HTTP
+ошибки не становятся нулевой квотой. Usage связывается через
+`opencode_provider`, значение которого равно `integration_id` и не равно
+`"anthropic"`.
 
 Claude account metadata/email требует отдельного account_file (`.claude.json`)
 и ожидаемого SHA256 account UUID в claude_fallback; default не монтирует этот
@@ -160,6 +177,8 @@ Provider polling по умолчанию 5м с jitter. Claude читает pass
 заголовках. Окна обоих источников объединяются по id. Если событий нет, это
 документированное исключение: provider APIs не имеют подтверждённой подписки.
 Retry-After и persisted backoff имеют приоритет; 401/403 не запускают refresh.
+Claude proxy использует отдельный polling worker и независимый state по ID;
+его прокси `observed_at` — время наблюдения, оно не подменяется временем GET.
 GET `/v1/quotas` не опрашивает upstream. Ошибка сохраняет last-good с stale.
 
 Проверки здоровья: `/healthz`, `/readyz` (точные HTTP semantics — `internal/httpapi`).

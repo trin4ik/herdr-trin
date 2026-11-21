@@ -61,6 +61,10 @@ type Subscription struct {
 	IntegrationID   string          `json:"integration_id,omitempty"`
 	CredentialID    string          `json:"credential_id,omitempty"`
 	ObservedFile    string          `json:"observed_file,omitempty"`
+	RemoteURL       string          `json:"remote_url,omitempty"`
+	TokenEnv        string          `json:"token_env,omitempty"`
+	DisplayName     string          `json:"display_name,omitempty"`
+	VerifiedPlan    string          `json:"verified_plan,omitempty"`
 	ObserveInterval string          `json:"observe_interval,omitempty"`
 	ClaudeFallback  *ClaudeFallback `json:"claude_fallback,omitempty"`
 	Retry           Retry           `json:"retry,omitempty"`
@@ -151,6 +155,8 @@ func (c Config) Specs() ([]collectors.Spec, error) {
 	}
 	seen := make(map[string]bool)
 	scopes := make(map[string]string)
+	claudeProxyURLs := make(map[string]string)
+	claudeProxyIntegrations := make(map[string]string)
 	var specs []collectors.Spec
 	for _, entry := range c.Subscriptions {
 		if !identifier.MatchString(entry.ID) || seen[entry.ID] {
@@ -163,6 +169,16 @@ func (c Config) Specs() ([]collectors.Spec, error) {
 		spec, err := c.spec(entry)
 		if err != nil {
 			return nil, fmt.Errorf("subscription %s: %w", entry.ID, err)
+		}
+		if spec.Source == collectors.SourceClaudeProxy {
+			if previous, ok := claudeProxyURLs[spec.ClaudeProxyURL]; ok {
+				return nil, fmt.Errorf("subscriptions %s and %s duplicate one Claude proxy URL", previous, spec.ID)
+			}
+			if previous, ok := claudeProxyIntegrations[spec.IntegrationID]; ok {
+				return nil, fmt.Errorf("subscriptions %s and %s duplicate one Claude proxy integration_id", previous, spec.ID)
+			}
+			claudeProxyURLs[spec.ClaudeProxyURL] = spec.ID
+			claudeProxyIntegrations[spec.IntegrationID] = spec.ID
 		}
 		// Duplicate collectors for the same upstream credential would multiply polling.
 		identity := spec.Provider + "|" + spec.IntegrationID + "|" + spec.CredentialID + "|" + spec.CredentialFile + "|" + spec.ObservedFile
@@ -179,9 +195,13 @@ func (c Config) Specs() ([]collectors.Spec, error) {
 }
 
 func (c Config) spec(entry Subscription) (collectors.Spec, error) {
+	if entry.VerifiedPlan != "" && !(entry.Provider == "claude" && entry.Source == collectors.SourceClaudeProxy) {
+		return collectors.Spec{}, errors.New("verified_plan is only valid for claude_proxy")
+	}
 	s := collectors.Spec{Definition: model.Definition{ID: entry.ID, Provider: entry.Provider, PublishAccountEmail: c.PublishAccountEmail},
 		CredentialFile: entry.CredentialFile, IntegrationID: entry.IntegrationID,
 		CredentialID: entry.CredentialID, ObservedFile: entry.ObservedFile,
+		ClaudeProxyURL: entry.RemoteURL, ClaudeProxyTokenEnv: entry.TokenEnv,
 		OpenCodeURL: strings.TrimRight(c.OpenCode.URL, "/"), OpenCodeBearerEnv: c.OpenCode.TokenEnv,
 		OpenCodeServiceFile: c.OpenCode.ServiceFile}
 	interval, stale := 5*time.Minute, 30*time.Minute
@@ -222,6 +242,37 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 			}
 		}
 	case "claude":
+		if entry.Source == collectors.SourceClaudeProxy {
+			s.Source, s.Product = collectors.SourceClaudeProxy, "claude_subscription"
+			s.DisplayName = entry.DisplayName
+			s.IntegrationID = entry.IntegrationID
+			s.ClaudeProxyURL, s.ClaudeProxyTokenEnv = entry.RemoteURL, entry.TokenEnv
+			if !identifier.MatchString(s.IntegrationID) || s.IntegrationID == "anthropic" || entry.ObservedFile != "" || entry.CredentialFile != "" ||
+				entry.ClaudeFallback != nil || entry.ObserveInterval != "" {
+				return s, errors.New("claude_proxy requires a unique safe integration_id other than anthropic, remote_url and token_env only")
+			}
+			canonicalURL, err := validateClaudeProxyURL(s.ClaudeProxyURL)
+			if err != nil {
+				return s, err
+			}
+			s.ClaudeProxyURL = canonicalURL
+			if !envName.MatchString(s.ClaudeProxyTokenEnv) {
+				return s, errors.New("token_env must name an environment variable, not contain a token")
+			}
+			if err := validateDisplayName(entry.DisplayName); err != nil {
+				return s, err
+			}
+			switch entry.VerifiedPlan {
+			case "", "free", "pro", "max", "max5", "max20", "ultra", "team", "enterprise":
+				s.VerifiedPlan = entry.VerifiedPlan
+			default:
+				return s, errors.New("unknown Claude verified_plan")
+			}
+			break
+		}
+		if entry.RemoteURL != "" || entry.TokenEnv != "" || entry.DisplayName != "" {
+			return s, errors.New("remote_url/token_env/display_name are only valid for claude_proxy")
+		}
 		s.Source, s.Product = "opencode_observed", "claude_subscription"
 		interval = 30 * time.Second // Backward-compatible passive-only source.
 		if !filepath.IsAbs(s.ObservedFile) || s.CredentialFile != "" || s.IntegrationID != "" {
@@ -306,6 +357,12 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		return s, errors.New("retry.auth_retry must be between 1m and 168h")
 	}
 	s.Scope = entry.Scope
+	if s.Source == collectors.SourceClaudeProxy {
+		if s.Scope != "" && s.Scope != s.IntegrationID {
+			return s, errors.New("claude_proxy scope must be omitted or match integration_id")
+		}
+		s.Scope = s.IntegrationID
+	}
 	if s.Scope == "" {
 		// Conservatively share cooldown between all selected accounts of a vendor.
 		s.Scope = entry.Provider
@@ -315,6 +372,41 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 	}
 	s.OpenCodeProvider = s.UsageProvider()
 	return s, nil
+}
+
+func validateDisplayName(v string) error {
+	if v == "" {
+		return nil
+	}
+	if len([]rune(v)) > 60 || strings.TrimSpace(v) != v {
+		return errors.New("display_name must be trimmed and at most 60 characters")
+	}
+	for _, r := range v {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return errors.New("display_name must not contain control characters")
+		}
+	}
+	return nil
+}
+
+func validateClaudeProxyURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" ||
+		u.Fragment != "" || u.Path != "/v1/subscription-limits" {
+		return "", errors.New("claude proxy remote_url must be HTTPS /v1/subscription-limits without credentials, query or fragment")
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	if u.Port() == "443" {
+		if strings.Contains(u.Host, ":") {
+			host := strings.Trim(u.Hostname(), "[]")
+			u.Host = net.JoinHostPort(host, "")
+			u.Host = strings.TrimSuffix(u.Host, ":")
+		} else {
+			u.Host = u.Hostname()
+		}
+	}
+	return u.String(), nil
 }
 
 func validateOpenCodeURL(value string) error {

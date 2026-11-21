@@ -79,18 +79,18 @@ type good struct {
 }
 
 type historyRecord struct {
-	OpenCodeProvider *string `json:"opencode_provider"`
-	ID         string         `json:"id"`
-	SubID      string         `json:"subscription_id"`
-	Provider   string         `json:"provider"`
-	Product    string         `json:"product"`
-	Source     string         `json:"source"`
-	Seq        uint64         `json:"seq"`
-	RecordedAt time.Time      `json:"recorded_at"`
-	ObservedAt time.Time      `json:"observed_at"`
-	Plan       *string        `json:"plan"`
-	Quotas     []model.Quota  `json:"quotas"`
-	Metrics    []model.Metric `json:"metrics"`
+	OpenCodeProvider *string        `json:"opencode_provider"`
+	ID               string         `json:"id"`
+	SubID            string         `json:"subscription_id"`
+	Provider         string         `json:"provider"`
+	Product          string         `json:"product"`
+	Source           string         `json:"source"`
+	Seq              uint64         `json:"seq"`
+	RecordedAt       time.Time      `json:"recorded_at"`
+	ObservedAt       time.Time      `json:"observed_at"`
+	Plan             *string        `json:"plan"`
+	Quotas           []model.Quota  `json:"quotas"`
+	Metrics          []model.Metric `json:"metrics"`
 }
 
 type attemptRecord struct {
@@ -318,15 +318,23 @@ func view(e *entry, now time.Time) model.Subscription {
 	st := e.st
 	sub := model.Subscription{
 		OpenCodeProvider: cloneStr(e.def.OpenCodeProvider),
-		ID:            e.def.ID,
-		Provider:      e.def.Provider,
-		Product:       e.def.Product,
-		Source:        e.def.Source,
-		LastAttemptAt: cloneTime(st.LastAttemptAt),
-		NextAttemptAt: cloneTime(st.NextAttemptAt),
-		Error:         cloneErr(st.Error),
-		Quotas:        []model.Quota{},
-		Metrics:       []model.Metric{},
+		ID:               e.def.ID,
+		Provider:         e.def.Provider,
+		Product:          e.def.Product,
+		Source:           e.def.Source,
+		LastAttemptAt:    cloneTime(st.LastAttemptAt),
+		NextAttemptAt:    cloneTime(st.NextAttemptAt),
+		Error:            cloneErr(st.Error),
+		Quotas:           []model.Quota{},
+		Metrics:          []model.Metric{},
+	}
+	if e.def.DisplayName != "" {
+		name := e.def.DisplayName
+		sub.DisplayName = &name
+	}
+	if e.def.VerifiedPlan != "" {
+		plan := e.def.VerifiedPlan
+		sub.Plan = &plan
 	}
 	if h := st.Hybrid; h != nil {
 		sub.LastPassiveAt = cloneTime(h.LastPassiveAt)
@@ -477,7 +485,7 @@ func (s *Store) Commit(u model.Update) error {
 			if old.Good == nil || old.Good.Key != g.Key {
 				ns.PendingHistory = append(ns.PendingHistory, historyRecord{
 					OpenCodeProvider: cloneStr(e.def.OpenCodeProvider),
-					ID: recordID(u.ID, ns.Seq, g.Key), SubID: u.ID, Seq: ns.Seq,
+					ID:               recordID(u.ID, ns.Seq, g.Key), SubID: u.ID, Seq: ns.Seq,
 					Provider: e.def.Provider, Product: e.def.Product, Source: actual,
 					RecordedAt: at, ObservedAt: g.ObservedAt, Plan: g.Plan,
 					Quotas: g.Quotas, Metrics: g.Metrics,
@@ -960,7 +968,7 @@ func cloneQuotas(in []model.Quota) []model.Quota {
 			ID: q.ID, Scope: cloneStr(q.Scope), Model: cloneStr(q.Model), Metric: q.Metric, Unit: q.Unit,
 			Used: cloneF(q.Used), Limit: cloneF(q.Limit), Remaining: cloneF(q.Remaining),
 			UsedPercent: cloneF(q.UsedPercent), RemainingPercent: cloneF(q.RemainingPercent),
-			Authority: q.Authority,
+			Authority:  q.Authority,
 			Label:      cloneStr(q.Label),
 			ObservedAt: cloneTime(q.ObservedAt),
 			Window: model.Window{

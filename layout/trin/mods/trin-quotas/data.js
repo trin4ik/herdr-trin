@@ -104,10 +104,14 @@ export function normalizeSnapshot(payload) {
       primary = windows.find(w => w.period === "week" || w.durationSeconds === 604800) ?? null;
     }
     primary = primary ?? windows.find(w => w.durationSeconds === 18000) ?? windows.find(w => w.id === "session") ?? windows[0];
+    // Operator-defined label, separate from the account identity.
+    const displayName = typeof s.display_name === "string" && !/[\x00-\x1f\x7f-\x9f]/.test(s.display_name)
+      ? s.display_name.trim().slice(0, 60) || null : null;
     // Optional service extension: never derive identity from IDs, sources or credentials.
     const accountEmail = typeof s.account_email === "string" && !/[\x00-\x1f\x7f]/.test(s.account_email)
       ? text(s.account_email.trim()) || null : null;
-    return { id: s.id, ...identity, plan: text(s.plan), accountEmail, source: text(s.source),
+    return { id: s.id, ...identity, name: displayName ?? identity.name, displayName,
+      plan: text(s.plan), accountEmail, source: text(s.source),
       primaryWindowId: primary?.id, windows,
       observedAt: date(s.last_success_at), lastAttemptAt: date(s.last_attempt_at),
       nextAttemptAt: date(s.next_attempt_at), staleAfter: date(s.stale_after),

@@ -18,6 +18,13 @@
       "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
       "interval": "5m", "observe_interval": "30s",
       "claude_fallback": { "enabled": true, "credential_file": "/absolute/path/to/.claude/.credentials.json" }
+    },
+    {
+      "id": "claude-container-a", "provider": "claude", "enabled": false,
+      "source": "claude_proxy", "integration_id": "claude-container-a",
+      "remote_url": "https://claude-proxy.example.com/v1/subscription-limits",
+      "token_env": "CLAUDE_PROXY_TOKEN", "display_name": "Claude Container A",
+      "interval": "5m", "stale_after": "30m"
     }
   ]
 }

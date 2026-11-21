@@ -62,7 +62,11 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
     .child(div().w(112).flex_none().truncate().text_color(t.muted).tooltip(label).child(label))
     .child(div().flex_1().min_w(0).truncate().text_right().text_color(color).tooltip(tooltip).child(value));
   const primary = primaryWindow(subscription), plan = planLabel(subscription.plan);
-  const profile = `${subscription.accountEmail || "Аккаунт не указан"}, ${plan || "тариф не указан"}`;
+  const namedProxy = subscription.source === "claude_proxy";
+  const account = subscription.accountEmail || (namedProxy ? "Anthropic" : "Аккаунт не указан");
+  const planText = plan || (namedProxy ? "" : "тариф не указан");
+  const profileSeparator = planText ? (namedProxy ? " · " : ", ") : "";
+  const profile = `${account}${profileSeparator}${planText}`;
   const warning = warningMessage(subscription, monitor, now);
 
   return div().id(`quota-details-${subscription.id}`).w(344).h(revealed ? height : 0).flex_none()
@@ -77,10 +81,11 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
           .child(div().h(18).line_height("18px").flex_none().font_semibold().text_size(13).text_color(t.foreground).truncate().child(subscription.name))
           .child(h_flex().id(`quota-account-${subscription.id}`).h(16).line_height("16px").flex_none().min_w(0).overflow_hidden().text_size(10.5).text_color(t.muted)
             .accessibility_label(profile).tooltip(profile)
-            .child(div().min_w(0).truncate().child(subscription.accountEmail || "Аккаунт не указан"))
-            .child(div().flex_none().child(", "))
-            .child(div().id(`quota-tier-${subscription.id}`).flex_none().max_w("50%").truncate().font_medium()
-              .text_color(plan ? t.foreground : t.muted).child(plan || "тариф не указан"))))
+            .child(div().min_w(0).truncate().child(account))
+            .when(Boolean(planText), el => el
+              .child(div().flex_none().child(profileSeparator))
+              .child(div().id(`quota-tier-${subscription.id}`).flex_none().max_w("50%").truncate().font_medium()
+                .text_color(plan ? t.foreground : t.muted).child(planText)))))
         .child(div().id(`quota-close-${subscription.id}`).size(24).flex_none().flex().items_center().justify_center()
           .rounded(5).text_color(t.muted).cursor_pointer().hover(el => el.bg(t.hover).text_color(t.foreground))
           .accessibility_label("Закрыть подробности подписки").tooltip("Свернуть · Escape")
