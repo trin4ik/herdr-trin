@@ -109,15 +109,16 @@ func (e *ErrorInfo) Error() string { return e.Code }
 
 // Definition is non-secret public identity plus freshness policy.
 type Definition struct {
-	OpenCodeProvider    *string
-	DisplayName         string
-	VerifiedPlan        string // Optional verified, operator-provided plan for a dedicated container.
-	ID                  string
-	Provider            string
-	Product             string
-	Source              string
-	StaleAfter          time.Duration
-	PublishAccountEmail bool // Explicit operator consent; false even with bearer by default.
+	OpenCodeProvider     *string
+	DisplayName          string
+	VerifiedPlan         string // Optional verified, operator-provided plan for a dedicated container.
+	VerifiedAccountEmail string // Optional operator-verified email; never emitted without publication consent.
+	ID                   string
+	Provider             string
+	Product              string
+	Source               string
+	StaleAfter           time.Duration
+	PublishAccountEmail  bool // Explicit operator consent; false even with bearer by default.
 }
 
 // Result.Raw is PRIVATE and must never be marshalled into public HTTP/history output.

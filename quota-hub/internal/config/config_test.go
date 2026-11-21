@@ -63,7 +63,7 @@ func TestClaudeProxyContainersHaveIndependentUsageIdentity(t *testing.T) {
 	c := valid(t)
 	first := Subscription{ID: "claude-a", Provider: "claude", Enabled: true, Source: "claude_proxy",
 		IntegrationID: "claude-container-a", RemoteURL: "https://proxy-a.example.com/v1/subscription-limits",
-		TokenEnv: "CLAUDE_PROXY_A_TOKEN", DisplayName: "Claude Container A", VerifiedPlan: "pro"}
+		TokenEnv: "CLAUDE_PROXY_A_TOKEN", DisplayName: "Claude Container A", VerifiedPlan: "pro", VerifiedEmail: "account@example.test"}
 	second := Subscription{ID: "claude-b", Provider: "claude", Enabled: true, Source: "claude_proxy",
 		IntegrationID: "claude-container-b", RemoteURL: "https://proxy-b.example.com/v1/subscription-limits",
 		TokenEnv: "CLAUDE_PROXY_B_TOKEN", DisplayName: "Claude Container B"}
@@ -83,6 +83,14 @@ func TestClaudeProxyContainersHaveIndependentUsageIdentity(t *testing.T) {
 	if specs[0].VerifiedPlan != "pro" || specs[1].VerifiedPlan != "" {
 		t.Fatal("plan must be explicitly configured per instance")
 	}
+	if specs[0].VerifiedAccountEmail != "account@example.test" || specs[1].VerifiedAccountEmail != "" {
+		t.Fatal("email must be explicitly verified per instance")
+	}
+	c.Subscriptions[0].VerifiedEmail = "Name <account@example.test>"
+	if _, err := c.Specs(); err == nil {
+		t.Fatal("accepted email containing a display name")
+	}
+	c.Subscriptions[0] = first
 	c.Subscriptions[0].VerifiedPlan = "guessed"
 	if _, err := c.Specs(); err == nil {
 		t.Fatal("accepted unidentified plan")

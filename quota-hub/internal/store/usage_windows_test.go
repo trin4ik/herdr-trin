@@ -17,6 +17,7 @@ func TestUsageFieldsPersistAndCopy(t *testing.T) {
 	definitions[0].OpenCodeProvider = &provider
 	definitions[0].DisplayName = "Claude Proxy A"
 	definitions[0].VerifiedPlan = "pro"
+	definitions[0].VerifiedAccountEmail = "account@example.test"
 	s, err := Open(dir, definitions)
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,10 @@ func TestUsageFieldsPersistAndCopy(t *testing.T) {
 		sub.DisplayName == nil || *sub.DisplayName != "Claude Proxy A" ||
 		sub.Quotas[0].Model == nil || *sub.Quotas[0].Model != modelID {
 		t.Fatalf("%+v", sub)
+	}
+	definitions[0].PublishAccountEmail = true
+	if sub := view(&entry{def: definitions[0]}, t0); sub.AccountEmail == nil || *sub.AccountEmail != "account@example.test" {
+		t.Fatal("verified address did not appear with publication consent")
 	}
 	wire, err := json.Marshal(s.Snapshot(t0))
 	if err != nil || !strings.Contains(string(wire), `"opencode_provider":"anthropic"`) ||

@@ -63,7 +63,8 @@ export function quotaDetails(subscription, monitor, t, icon, revealed, close, vi
     .child(div().flex_1().min_w(0).truncate().text_right().text_color(color).tooltip(tooltip).child(value));
   const primary = primaryWindow(subscription), plan = planLabel(subscription.plan);
   const namedProxy = subscription.source === "claude_proxy";
-  const account = subscription.accountEmail || (namedProxy ? "Anthropic" : "Аккаунт не указан");
+  const account = namedProxy ? [subscription.accountEmail, "Anthropic"].filter(Boolean).join(" · ")
+    : subscription.accountEmail || "Аккаунт не указан";
   const planText = plan || (namedProxy ? "" : "тариф не указан");
   const profileSeparator = planText ? (namedProxy ? " · " : ", ") : "";
   const profile = `${account}${profileSeparator}${planText}`;

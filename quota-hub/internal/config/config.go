@@ -65,6 +65,7 @@ type Subscription struct {
 	TokenEnv        string          `json:"token_env,omitempty"`
 	DisplayName     string          `json:"display_name,omitempty"`
 	VerifiedPlan    string          `json:"verified_plan,omitempty"`
+	VerifiedEmail   string          `json:"verified_account_email,omitempty"`
 	ObserveInterval string          `json:"observe_interval,omitempty"`
 	ClaudeFallback  *ClaudeFallback `json:"claude_fallback,omitempty"`
 	Retry           Retry           `json:"retry,omitempty"`
@@ -195,8 +196,8 @@ func (c Config) Specs() ([]collectors.Spec, error) {
 }
 
 func (c Config) spec(entry Subscription) (collectors.Spec, error) {
-	if entry.VerifiedPlan != "" && !(entry.Provider == "claude" && entry.Source == collectors.SourceClaudeProxy) {
-		return collectors.Spec{}, errors.New("verified_plan is only valid for claude_proxy")
+	if (entry.VerifiedPlan != "" || entry.VerifiedEmail != "") && !(entry.Provider == "claude" && entry.Source == collectors.SourceClaudeProxy) {
+		return collectors.Spec{}, errors.New("verified_plan/verified_account_email are only valid for claude_proxy")
 	}
 	s := collectors.Spec{Definition: model.Definition{ID: entry.ID, Provider: entry.Provider, PublishAccountEmail: c.PublishAccountEmail},
 		CredentialFile: entry.CredentialFile, IntegrationID: entry.IntegrationID,
@@ -267,6 +268,13 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 				s.VerifiedPlan = entry.VerifiedPlan
 			default:
 				return s, errors.New("unknown Claude verified_plan")
+			}
+			if entry.VerifiedEmail != "" {
+				email := model.Email(entry.VerifiedEmail)
+				if email == nil || *email != entry.VerifiedEmail {
+					return s, errors.New("verified_account_email must be a plain email address")
+				}
+				s.VerifiedAccountEmail = *email
 			}
 			break
 		}

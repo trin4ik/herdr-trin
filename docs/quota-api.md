@@ -162,6 +162,9 @@ quota ID. Ответ ограничен 256 KiB и 64 окнами, провер
 `display_name` — optional локальная подпись до 60 символов без control
 characters. `verified_plan` — optional локальная метка уже проверенного тарифа;
 публикуется как `plan`, даже до первого замера. Эти поля не определяют identity.
+`verified_account_email` можно сохранить только в приватном конфиге
+после проверки входа на этом экземпляре. В wire-снимок контейнера не входит;
+в общем снимке становится `account_email` только с `publish_account_email=true`.
 `opencode_provider` равен
 `integration_id`, поэтому usage разных контейнеров не сливается с `anthropic`
 или друг с другом. Этот источник отдельный от старого Claude passive/native

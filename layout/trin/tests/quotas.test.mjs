@@ -494,6 +494,8 @@ test("separate Claude instance keeps its own label and no fake percentage", () =
   panel.monitor.subscriptions = subscriptions;
   panel.expanded = panel.revealed = "claude-us";
   assert.equal(text(byID(panel.render(), "quota-account-claude-us")), "Anthropic · Pro");
+  subscriptions[1].accountEmail = "test@example.test";
+  assert.equal(text(byID(panel.render(), "quota-account-claude-us")), "test@example.test · Anthropic · Pro");
 });
 
 const rawUsage = {

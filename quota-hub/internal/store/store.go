@@ -336,6 +336,9 @@ func view(e *entry, now time.Time) model.Subscription {
 		plan := e.def.VerifiedPlan
 		sub.Plan = &plan
 	}
+	if e.def.PublishAccountEmail {
+		sub.AccountEmail = model.Email(e.def.VerifiedAccountEmail)
+	}
 	if h := st.Hybrid; h != nil {
 		sub.LastPassiveAt = cloneTime(h.LastPassiveAt)
 		sub.NextPollAt = cloneTime(h.NextRemoteAttemptAt)
