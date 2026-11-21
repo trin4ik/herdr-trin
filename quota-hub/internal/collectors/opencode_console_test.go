@@ -13,8 +13,8 @@ import (
 // Synthetic fixtures only; tests never read a real workspace or credential.
 const consoleCredentials = `{"data":[
  {"integrationID":"opencode","active":false,"value":{"type":"key","key":"sk-inactive-key"}},
- {"integrationID":"opencode","active":true,"value":{"type":"oauth","access":"st-console-session-token",
- "refresh":"rt-never-used","expires":1800000000000,"metadata":{"orgID":"org_synthetic","email":"nobody@example.invalid"}}}]}`
+ {"id":"cred-synthetic","integrationID":"opencode","active":true,"value":{"type":"oauth","methodID":"device","access":"st-console-session-token",
+ "refresh":"rt-never-used","expires":1800000000000,"metadata":{"server":"https://opencode.ai/console","accountID":"user-synthetic","orgID":"org_synthetic","email":"nobody@example.invalid"}}}]}`
 
 const consoleGo = `{"usage":{"rolling":{"status":"ok","percent":12.5,"resetsAt":"2026-11-10T17:00:00.000Z"},
  "weekly":{"status":"rate-limited","percent":80,"resetsAt":"2026-11-13T07:00:00.000Z"},
@@ -38,9 +38,16 @@ func consoleSpec(serviceFile string) Spec {
 
 func newGoForTest(t *testing.T, credentials string, handler http.HandlerFunc) Collector {
 	t.Helper()
+	return newGoWithConsentForTest(t, credentials, false, handler)
+}
+
+func newGoWithConsentForTest(t *testing.T, credentials string, publish bool, handler http.HandlerFunc) Collector {
+	t.Helper()
 	oc := serve(t, openCodeHandler(t, []byte(credentials), basicFor(testServicePassword)))
 	prov := serve(t, handler)
-	c, err := New(consoleSpec(registrationFor(t, oc.URL, testServicePassword)), opts(map[string]string{"console_go": prov.URL + "/zen/go/v1/usage"}))
+	spec := consoleSpec(registrationFor(t, oc.URL, testServicePassword))
+	spec.PublishAccountEmail = publish
+	c, err := New(spec, opts(map[string]string{"console_go": prov.URL + "/zen/go/v1/usage"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +77,9 @@ func TestOpenCodeGoOnlyRequestsAllowance(t *testing.T) {
 	if requests != 1 || len(res.Quotas) != 3 || len(res.Metrics) != 0 || res.Source != SourceOpenCodeConsole {
 		t.Fatalf("unexpected snapshot %+v, requests=%d", res, requests)
 	}
+	if res.Plan == nil || *res.Plan != "Go" || res.Profile != nil {
+		t.Fatal("paid meter must confirm Go, but email export requires consent")
+	}
 	for i, id := range []string{"go_rolling", "go_weekly", "go_monthly"} {
 		q := res.Quotas[i]
 		if q.ID != id || q.Limited == nil || !*q.Limited || q.RemainingPercent == nil ||
@@ -96,9 +106,9 @@ func TestOpenCodeGoRejectsExpiredAmbiguousAndMissingCredentials(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newGoForTest(t, credentials, func(w http.ResponseWriter, r *http.Request) { t.Error("unexpected upstream request") })
-			_, err := c.Fetch(context.Background())
-			if err == nil {
-				t.Fatal("invalid credential accepted")
+			res, err := c.Fetch(context.Background())
+			if err == nil || res.Plan != nil || res.Profile != nil {
+				t.Fatal("invalid credential returned metadata")
 			}
 			want := CodeCredentialsUnavailable
 			if name == "expired" {
@@ -118,7 +128,7 @@ func TestOpenCodeGoRequiresEntitlementAndPropagatesRateLimit(t *testing.T) {
 			w.WriteHeader(status)
 		})
 		res, err := c.Fetch(context.Background())
-		if err == nil || len(res.Quotas) != 0 || errInfo(t, err).HTTPStatus != status {
+		if err == nil || len(res.Quotas) != 0 || res.Plan != nil || res.Profile != nil || errInfo(t, err).HTTPStatus != status {
 			t.Fatalf("status %d became a valid/empty allowance: %+v %v", status, res, err)
 		}
 		if status == 429 && errInfo(t, err).RetryAt == nil {
@@ -139,9 +149,43 @@ func TestOpenCodeGoInvalidAndPartialSuccessIsNotZero(t *testing.T) {
 	} {
 		c := newGoForTest(t, consoleCredentials, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
 		res, err := c.Fetch(context.Background())
-		if err == nil || errInfo(t, err).Code != CodeInvalidResponse || len(res.Quotas) != 0 {
+		if err == nil || errInfo(t, err).Code != CodeInvalidResponse || len(res.Quotas) != 0 || res.Plan != nil || res.Profile != nil {
 			t.Fatalf("invalid success accepted: %s, %+v %v", body, res, err)
 		}
+	}
+}
+
+func TestOpenCodeGoEmailSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, credentials string
+		wantEmail         bool
+	}{
+		{"official device", consoleCredentials, true},
+		{"old official host", strings.Replace(consoleCredentials, "https://opencode.ai/console", "https://console.opencode.ai", 1), true},
+		{"custom Console", strings.Replace(consoleCredentials, "https://opencode.ai/console", "https://console.example.test", 1), false},
+		{"unknown method", strings.Replace(consoleCredentials, `"device"`, `"other"`, 1), false},
+		{"no account ID", strings.Replace(consoleCredentials, `"user-synthetic"`, `null`, 1), false},
+		{"bad email", strings.Replace(consoleCredentials, `"nobody@example.invalid"`, `{"address":"nobody@example.invalid"}`, 1), false},
+		{"key", `{"data":[{"id":"c1","integrationID":"opencode","active":true,"value":{"type":"key","key":"synthetic-key","metadata":{"server":"https://opencode.ai/console","orgID":"org_synthetic","accountID":"user-synthetic","email":"nobody@example.invalid"}}}]}`, false},
+		{"inactive metadata", `{"data":[{"id":"c1","integrationID":"opencode","active":false,"value":{"type":"oauth","methodID":"device","access":"unused","metadata":{"server":"https://opencode.ai/console","orgID":"org_synthetic","accountID":"user-synthetic","email":"nobody@example.invalid"}}},{"id":"c2","integrationID":"opencode","active":true,"label":"nobody@example.invalid","value":{"type":"oauth","methodID":"device","access":"active"}}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newGoWithConsentForTest(t, tc.credentials, true, func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(consoleGo))
+			})
+			res, err := c.Fetch(context.Background())
+			if err != nil || res.Plan == nil || *res.Plan != "Go" {
+				t.Fatalf("metadata must not affect a valid meter: %v", err)
+			}
+			if tc.wantEmail {
+				if res.Profile == nil || res.Profile.AccountEmail == nil || *res.Profile.AccountEmail != "nobody@example.invalid" ||
+					res.Profile.Identity != res.ProfileIdentity || res.ProfileIdentity == noConsoleProfile {
+					t.Fatal("missing bound Console email")
+				}
+			} else if res.Profile != nil || res.ProfileIdentity != noConsoleProfile {
+				t.Fatal("unverified Console email accepted")
+			}
+		})
 	}
 }
 

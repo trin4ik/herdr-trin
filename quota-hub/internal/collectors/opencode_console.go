@@ -20,9 +20,15 @@ type openCodeConsoleCollector struct {
 }
 
 type consoleCredential struct {
-	token string
-	orgID string
+	token           string
+	orgID           string
+	profileIdentity string
+	email           *string
 }
+
+// Distinguish a successful usage result with no trusted metadata from a
+// collector that did not check for metadata at all.
+const noConsoleProfile = "opencode-console:unverified"
 
 func (c *openCodeConsoleCollector) consoleCredential(ctx context.Context) (consoleCredential, *model.ErrorInfo) {
 	target, auth, e := c.oc.registrationFor("/api/credential")
@@ -43,15 +49,20 @@ func (c *openCodeConsoleCollector) consoleCredential(ctx context.Context) (conso
 	defer zero(r.body)
 	var wrapper struct {
 		Data []struct {
-			IntegrationID string `json:"integrationID"`
-			Active        bool   `json:"active"`
+			IntegrationID string          `json:"integrationID"`
+			Active        bool            `json:"active"`
+			ID            json.RawMessage `json:"id"`
 			Value         struct {
-				Type     string `json:"type"`
-				Key      string `json:"key"`
-				Access   string `json:"access"`
-				Expires  *int64 `json:"expires"`
+				Type     string          `json:"type"`
+				Key      string          `json:"key"`
+				Access   string          `json:"access"`
+				Expires  *int64          `json:"expires"`
+				MethodID json.RawMessage `json:"methodID"`
 				Metadata struct {
-					OrgID string `json:"orgID"`
+					OrgID     string          `json:"orgID"`
+					Server    json.RawMessage `json:"server"`
+					AccountID json.RawMessage `json:"accountID"`
+					Email     json.RawMessage `json:"email"`
 				} `json:"metadata"`
 			} `json:"value"`
 		} `json:"data"`
@@ -84,7 +95,24 @@ func (c *openCodeConsoleCollector) consoleCredential(ctx context.Context) (conso
 	if !validHeaderToken(token) {
 		return consoleCredential{}, fail(CodeCredentialsUnavailable)
 	}
-	return consoleCredential{token: token, orgID: entry.Value.Metadata.OrgID}, nil
+	meta := entry.Value.Metadata
+	cred := consoleCredential{token: token, orgID: meta.OrgID, profileIdentity: noConsoleProfile}
+	if c.spec.PublishAccountEmail && entry.Value.Type == "oauth" {
+		method, _ := asString(entry.Value.MethodID)
+		server, _ := asString(meta.Server)
+		account, _ := asString(meta.AccountID)
+		id, _ := asString(entry.ID)
+		email, _ := asString(meta.Email)
+		// The Console's device sign-in populates accountID and email together.
+		// Do not trust labels, key metadata or credentials for a custom Console.
+		if method == "device" && (server == "https://opencode.ai/console" || server == "https://console.opencode.ai") &&
+			validHeaderToken(id) && validHeaderToken(account) && validHeaderToken(cred.orgID) {
+			if cred.email = model.Email(email); cred.email != nil {
+				cred.profileIdentity = keyedCredentialIdentity(identity(id+"\x00"+account+"\x00"+cred.orgID), token)
+			}
+		}
+	}
+	return cred, nil
 }
 
 func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, error) {
@@ -92,7 +120,7 @@ func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, err
 	defer cancel()
 	cred, e := c.consoleCredential(ctx)
 	if e != nil {
-		return model.Result{}, e
+		return model.Result{}, withProfileIdentity(e, "", true)
 	}
 	headers := map[string]string{"Authorization": "Bearer " + cred.token}
 	if cred.orgID != "" {
@@ -101,18 +129,38 @@ func (c *openCodeConsoleCollector) Fetch(ctx context.Context) (model.Result, err
 	}
 	r, e := c.get(ctx, c.goUsage, headers, maxBodyBytes)
 	if e != nil {
-		return model.Result{}, e
+		return model.Result{}, withProfileIdentity(e, "", true)
 	}
 	if r.status != http.StatusOK {
-		return model.Result{}, c.statusError(r)
+		return model.Result{}, withProfileIdentity(c.statusError(r), "", true)
 	}
 	observed := c.now().UTC()
 	quotas, err := parseConsoleGo(r.body, observed)
 	if err != nil {
-		return model.Result{}, err
+		return model.Result{}, withProfileIdentity(err, "", true)
 	}
-	res, err := finish(observed, nil, quotas, nil, nil)
+	// The paid-only endpoint confirms Go entitlement, not a price or tier
+	// inferred from percentages.
+	plan := sptr("Go")
+	res, err := finish(observed, plan, quotas, nil, nil)
 	res.Source = SourceOpenCodeConsole
+	res.ProfileIdentity = noConsoleProfile
+	if cred.email != nil {
+		// A switch while the Go GET was in flight must not publish the old email.
+		// This is another local credential read, never auth resolve or refresh.
+		// Bound the optional check separately so it does not consume the usage deadline.
+		budget := time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			budget = min(budget, time.Until(deadline)/2)
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		current, e := c.consoleCredential(checkCtx)
+		if e == nil && current.profileIdentity == cred.profileIdentity && current.email != nil && *current.email == *cred.email {
+			res.ProfileIdentity = cred.profileIdentity
+			res.Profile = &model.Profile{Identity: cred.profileIdentity, AccountEmail: cred.email}
+		}
+	}
 	return res, err
 }
 

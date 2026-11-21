@@ -385,6 +385,16 @@ func view(e *entry, now time.Time) model.Subscription {
 			stale = true
 		}
 	}
+	if e.def.Source == "opencode_console" && e.def.Product == "opencode_go" {
+		// Go's plan comes from a successful paid meter, independently of email
+		// metadata. Do not present an old entitlement as current.
+		sub.Plan = nil
+		if !stale {
+			sub.Plan = cloneStr(g.Plan)
+		} else {
+			sub.AccountEmail = nil
+		}
+	}
 	sub.Stale = stale
 	sub.Status = "ok"
 	if stale {
@@ -475,7 +485,9 @@ func (s *Store) Commit(u model.Update) error {
 				if e.def.Provider == "codex" && old.Profile != nil && !old.Profile.Invalidated && p.Identity != old.Profile.Identity && sameCodexAccount(old.Profile.Identity, p.Identity) {
 					// A late response from the previous native token cannot replace
 					// the generation selected by VerifyProfileIdentity.
-				} else if old.Profile != nil && (old.Profile.Invalidated || (old.Profile.Identity != "" && p.Identity != old.Profile.Identity)) {
+				} else if current := ns.Profile; current != nil && (current.Invalidated || (current.Identity != "" && p.Identity != current.Identity)) {
+					// An inline profile may follow a verified credential selection
+					// earlier in this commit; compare with that selection, not old state.
 					ns.Profile = &model.Profile{Invalidated: true}
 				} else {
 					ns.Profile = &model.Profile{Identity: p.Identity, AccountEmail: model.Email(value(p.AccountEmail)), Plan: model.ProfileText(value(p.Plan), 100), Invalidated: p.Invalidated}

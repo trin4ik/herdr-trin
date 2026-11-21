@@ -160,7 +160,8 @@ func New(s *store.Store, workers []Worker, opts Options) (*Engine, error) {
 			g = &scopeGuard{sem: make(chan struct{}, 1)}
 			scopes[scope] = g
 		}
-		if _, ok := w.Collector.(collectors.ProfileCollector); ok {
+		_, remoteProfile := w.Collector.(collectors.ProfileCollector)
+		if remoteProfile {
 			if ps, found := s.RemoteProfileSchedule(id); found && ps.Error != nil && ps.Error.HTTPStatus == 429 {
 				if ps.NextAttemptAt != nil {
 					g.raise(*ps.NextAttemptAt)
@@ -169,6 +170,9 @@ func New(s *store.Store, workers []Worker, opts Options) (*Engine, error) {
 					g.raise(*ps.Error.RetryAt)
 				}
 			}
+		}
+		// Go binds its profile during the usage poll, not in a separate request.
+		if remoteProfile || w.Spec.Source == collectors.SourceOpenCodeConsole {
 			if err := s.HideRemoteProfile(id); err != nil {
 				return nil, err
 			}
