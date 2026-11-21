@@ -147,7 +147,7 @@ func TestBadEvents(t *testing.T) {
 	}
 }
 
-const priceJSON = `{"p":{"models":{"m":{"cost":{"input":1,"output":2,"cache_read":3,"cache_write":4,"tiers":[{"tier":{"type":"context","size":100},"input":5,"output":6},{"tier":{"type":"context","size":300000},"input":9,"output":10},{"tier":{"type":"other","size":400000},"input":999}],"context_over_200k":{"input":7,"output":8}}}}}}`
+const priceJSON = `{"p":{"models":{"m":{"canonical_model_id":"p/m","cost":{"input":1,"output":2,"cache_read":3,"cache_write":4,"tiers":[{"tier":{"type":"context","size":100},"input":5,"output":6},{"tier":{"type":"context","size":300000},"input":9,"output":10},{"tier":{"type":"other","size":400000},"input":999}],"context_over_200k":{"input":7,"output":8}}}}}}`
 
 func TestPrices(t *testing.T) {
 	i := importer(t)
@@ -196,20 +196,28 @@ func TestPriceFallbackForUnknownProvider(t *testing.T) {
 	var err error
 	i.prices, err = decodePrices([]byte(`{
 		"anthropic":{"models":{
-			"claude-opus-test":{"cost":{"input":4,"output":20,"cache_read":0.2,"cache_write":5}}
+			"claude-opus-test":{"canonical_model_id":"anthropic/claude-opus-test","cost":{"input":4,"output":20,"cache_read":0.2,"cache_write":5}}
+		}},
+		"original":{"models":{
+			"m":{"canonical_model_id":"original/m","cost":{"input":2,"tiers":[{"tier":{"type":"context","size":100},"input":6}]}},
+			"conflict":{"canonical_model_id":"original/conflict","cost":{"input":2}},
+			"provider-mismatch":{"canonical_model_id":"other/provider-mismatch","cost":{"input":2}},
+			"no-price":{"canonical_model_id":"original/no-price"},
+			"free":{"canonical_model_id":"original/free","cost":{"input":0,"output":0}}
 		}},
 		"relay":{"models":{
-			"claude-opus-test":{"cost":{"input":3,"output":15}},
-			"unique":{"cost":{"input":2,"tiers":[{"tier":{"type":"context","size":100},"input":6}]}},
-			"same":{"cost":{"input":2}},
-			"conflict":{"cost":{"input":2}},
-			"no-price":{},
-			"free":{"cost":{"input":0,"output":0}}
+			"claude-opus-test":{"canonical_model_id":"anthropic/claude-opus-test","cost":{"input":3,"output":15}},
+			"m":{"canonical_model_id":"original/m","cost":{"input":1}},
+			"original/m":{"canonical_model_id":"original/m","cost":{"input":1}},
+			"m-fast":{"canonical_model_id":"original/m","cost":{"input":5}},
+			"relay-only":{"cost":{"input":2}},
+			"no-price":{"canonical_model_id":"original/no-price","cost":{"input":2}},
+			"absent":{"canonical_model_id":"missing/absent","cost":{"input":2}},
+			"original/provider-mismatch":{"canonical_model_id":"original/provider-mismatch","cost":{"input":2}}
 		}},
 		"other":{"models":{
-			"unique":{},
-			"same":{"cost":{"input":2}},
-			"conflict":{"cost":{"input":2,"tiers":[{"tier":{"type":"context","size":100},"input":6}]}}
+			"relay-only":{"cost":{"input":2}},
+			"conflict":{"canonical_model_id":"other/conflict","cost":{"input":2}}
 		}}
 	}`))
 	if err != nil {
@@ -222,13 +230,16 @@ func TestPriceFallbackForUnknownProvider(t *testing.T) {
 		priced                bool
 	}{
 		{"canonical Claude price", "custom", "claude-opus-test", 1e6, 4, true},
+		{"canonical price keeps context tier", "custom", "m", 1e6, 6, true},
+		{"provider-qualified model ID", "custom", "original/m", 1e6, 6, true},
 		{"existing provider wins", "relay", "claude-opus-test", 1e6, 3, true},
-		{"no fallback within known provider", "relay", "claude-opus-missing", 1e6, 0, false},
-		{"model only at a different provider", "anthropic", "unique", 1e6, 0, false},
-		{"unique price keeps context tier", "custom", "unique", 1e6, 6, true},
-		{"matching prices", "custom", "same", 1e6, 2, true},
-		{"different context tiers", "custom", "conflict", 1e6, 0, false},
-		{"missing price", "custom", "no-price", 1e6, 0, false},
+		{"no fallback within known provider", "anthropic", "m", 1e6, 0, false},
+		{"no base price for a different mode", "custom", "m-fast", 1e6, 0, false},
+		{"only relay prices", "custom", "relay-only", 1e6, 0, false},
+		{"conflicting canonical IDs", "custom", "conflict", 1e6, 0, false},
+		{"canonical target points elsewhere", "custom", "original/provider-mismatch", 1e6, 0, false},
+		{"missing original price", "custom", "no-price", 1e6, 0, false},
+		{"missing original provider", "custom", "absent", 1e6, 0, false},
 		{"explicit free price", "custom", "free", 1e6, 0, true},
 		{"exact ID only", "custom", "CLAUDE-OPUS-TEST", 1e6, 0, false},
 	} {

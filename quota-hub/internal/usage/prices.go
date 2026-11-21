@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
@@ -31,8 +30,9 @@ type cost struct {
 	Over *rate `json:"context_over_200k"`
 }
 type model struct {
-	Cost         *cost `json:"cost"`
-	Experimental struct {
+	CanonicalModelID string `json:"canonical_model_id"`
+	Cost             *cost  `json:"cost"`
+	Experimental     struct {
 		Modes map[string]struct {
 			Cost *cost `json:"cost"`
 		} `json:"modes"`
@@ -111,31 +111,32 @@ func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
 	return rate{}, nil, false
 }
 
-// lookupByModelID uses only exact IDs with a listed cost. For Claude, the
-// first-party rate takes precedence over reseller prices. Otherwise all
-// matching rates must agree so catalog iteration order cannot affect pricing.
+// lookupByModelID uses exact catalog matches to identify the first-party
+// provider. Reseller prices and ambiguous canonical IDs are never used.
 func (s snapshot) lookupByModelID(id string) (rate, []tier, bool) {
-	if strings.HasPrefix(id, "claude-") {
-		if m := s["anthropic"].Models[id]; m.Cost != nil {
-			r, tiers := m.Cost.table()
-			return r, tiers, true
-		}
-	}
-	var r rate
-	var tiers []tier
-	found := false
+	var canonical string
 	for _, entry := range s {
-		m := entry.Models[id]
-		if m.Cost == nil {
+		ref := entry.Models[id].CanonicalModelID
+		if ref == "" {
 			continue
 		}
-		candidate, candidateTiers := m.Cost.table()
-		if found && (candidate != r || !slices.Equal(candidateTiers, tiers)) {
+		if canonical != "" && canonical != ref {
 			return rate{}, nil, false
 		}
-		r, tiers, found = candidate, candidateTiers, true
+		canonical = ref
 	}
-	return r, tiers, found
+	provider, modelID, ok := strings.Cut(canonical, "/")
+	// A canonical ID can point to the base model for a differently priced mode.
+	// Don't substitute a different model ID when pricing the event.
+	if !ok || provider == "" || modelID == "" || (id != modelID && id != canonical) {
+		return rate{}, nil, false
+	}
+	m := s[provider].Models[modelID]
+	if m.Cost == nil || (m.CanonicalModelID != "" && m.CanonicalModelID != canonical) {
+		return rate{}, nil, false
+	}
+	r, tiers := m.Cost.table()
+	return r, tiers, true
 }
 
 type priceIndex struct {
