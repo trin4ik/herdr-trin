@@ -175,18 +175,89 @@ func TestPrices(t *testing.T) {
 			t.Fatalf("%+v -> %v %+v", tt, usd, price)
 		}
 	}
+	missing := "missing"
 	for _, tt := range []struct {
 		provider, model *string
 		prices          snapshot
 		status          string
 	}{
-		{nil, nil, i.prices, "no_model"}, {&p, &m, nil, "no_prices"}, {&m, &m, i.prices, "unknown_model"},
+		{nil, nil, i.prices, "no_model"}, {&p, &m, nil, "no_prices"}, {&p, &missing, i.prices, "unknown_model"},
 	} {
 		i.prices = tt.prices
 		usd, price := i.price(Event{Provider: tt.provider, Model: tt.model})
 		if usd != nil || price.Status != tt.status {
 			t.Fatalf("%v %+v", usd, price)
 		}
+	}
+}
+
+func TestPriceFallbackForUnknownProvider(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(`{
+		"anthropic":{"models":{
+			"claude-opus-test":{"cost":{"input":4,"output":20,"cache_read":0.2,"cache_write":5}}
+		}},
+		"relay":{"models":{
+			"claude-opus-test":{"cost":{"input":3,"output":15}},
+			"unique":{"cost":{"input":2,"tiers":[{"tier":{"type":"context","size":100},"input":6}]}},
+			"same":{"cost":{"input":2}},
+			"conflict":{"cost":{"input":2}},
+			"no-price":{},
+			"free":{"cost":{"input":0,"output":0}}
+		}},
+		"other":{"models":{
+			"unique":{},
+			"same":{"cost":{"input":2}},
+			"conflict":{"cost":{"input":2,"tiers":[{"tier":{"type":"context","size":100},"input":6}]}}
+		}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, provider, model string
+		input                 int64
+		want                  float64
+		priced                bool
+	}{
+		{"canonical Claude price", "custom", "claude-opus-test", 1e6, 4, true},
+		{"existing provider wins", "relay", "claude-opus-test", 1e6, 3, true},
+		{"no fallback within known provider", "relay", "claude-opus-missing", 1e6, 0, false},
+		{"model only at a different provider", "anthropic", "unique", 1e6, 0, false},
+		{"unique price keeps context tier", "custom", "unique", 1e6, 6, true},
+		{"matching prices", "custom", "same", 1e6, 2, true},
+		{"different context tiers", "custom", "conflict", 1e6, 0, false},
+		{"missing price", "custom", "no-price", 1e6, 0, false},
+		{"explicit free price", "custom", "free", 1e6, 0, true},
+		{"exact ID only", "custom", "CLAUDE-OPUS-TEST", 1e6, 0, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			usd, price := i.price(Event{Provider: &tt.provider, Model: &tt.model, Tokens: Tokens{Input: tt.input}})
+			if tt.priced {
+				if price.Status != "ok" || usd == nil || *usd != tt.want {
+					t.Fatalf("got USD %v, price %+v; want %v", usd, price, tt.want)
+				}
+			} else if price.Status != "unknown_model" || usd != nil {
+				t.Fatalf("got USD %v, price %+v; want unknown_model", usd, price)
+			}
+		})
+	}
+}
+
+func TestFallbackPriceKeepsUsageProvider(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(priceJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Replace(event("a", clock.Add(-time.Hour)), `"provider":"p"`, `"provider":"custom"`, 1)
+	write(t, filepath.Join(i.Dir, "events", "a.jsonl"), line)
+	report := cycle(t, i).Windows["5h"]
+	if report.Calls != 1 || report.Unpriced != 0 || report.USD != 39/1e6 || len(report.ByModel) != 1 ||
+		report.ByModel[0].Provider == nil || *report.ByModel[0].Provider != "custom" {
+		t.Fatalf("unexpected report: %+v", report)
 	}
 }
 

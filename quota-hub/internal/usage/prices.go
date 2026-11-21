@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -29,7 +31,7 @@ type cost struct {
 	Over *rate `json:"context_over_200k"`
 }
 type model struct {
-	Cost         cost `json:"cost"`
+	Cost         *cost `json:"cost"`
 	Experimental struct {
 		Modes map[string]struct {
 			Cost *cost `json:"cost"`
@@ -45,7 +47,10 @@ type tier struct {
 }
 
 // table lists the base rate and context tiers in OpenCode's order; context_over_200k is a 200000 tier.
-func (c cost) table() (rate, []tier) {
+func (c *cost) table() (rate, []tier) {
+	if c == nil {
+		return rate{}, nil
+	}
 	var tiers []tier
 	for _, t := range c.Tiers {
 		if t.Tier.Type == "context" {
@@ -60,7 +65,7 @@ func (c cost) table() (rate, []tier) {
 
 // modeTable prices "<model>-<mode>" like OpenCode's mergeCost: the mode replaces the base rate,
 // base tiers stay unless the mode sets a tier of the same size.
-func modeTable(base cost, mode *cost) (rate, []tier) {
+func modeTable(base, mode *cost) (rate, []tier) {
 	r, tiers := base.table()
 	if mode == nil {
 		return r, tiers
@@ -86,7 +91,11 @@ func modeTable(base cost, mode *cost) (rate, []tier) {
 }
 
 func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
-	models := s[provider].Models
+	entry, ok := s[provider]
+	if !ok {
+		return s.lookupByModelID(id)
+	}
+	models := entry.Models
 	if m, ok := models[id]; ok {
 		r, tiers := m.Cost.table()
 		return r, tiers, true
@@ -100,6 +109,33 @@ func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
 		}
 	}
 	return rate{}, nil, false
+}
+
+// lookupByModelID uses only exact IDs with a listed cost. For Claude, the
+// first-party rate takes precedence over reseller prices. Otherwise all
+// matching rates must agree so catalog iteration order cannot affect pricing.
+func (s snapshot) lookupByModelID(id string) (rate, []tier, bool) {
+	if strings.HasPrefix(id, "claude-") {
+		if m := s["anthropic"].Models[id]; m.Cost != nil {
+			r, tiers := m.Cost.table()
+			return r, tiers, true
+		}
+	}
+	var r rate
+	var tiers []tier
+	found := false
+	for _, entry := range s {
+		m := entry.Models[id]
+		if m.Cost == nil {
+			continue
+		}
+		candidate, candidateTiers := m.Cost.table()
+		if found && (candidate != r || !slices.Equal(candidateTiers, tiers)) {
+			return rate{}, nil, false
+		}
+		r, tiers, found = candidate, candidateTiers, true
+	}
+	return r, tiers, found
 }
 
 type priceIndex struct {
