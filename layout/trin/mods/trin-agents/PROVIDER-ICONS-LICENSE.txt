@@ -1,10 +1,19 @@
 Provider logos copied from anomalyco/opencode v2.2.5:
 packages/ui/src/assets/icons/provider/{openai,anthropic}.svg
+
+Google G path data from LobeHub Icons (MIT), with SVG attributes adapted for Herdr:
+https://github.com/lobehub/lobe-icons/blob/05260484d9f4de68f90cc87a634ae68fa4043efd/packages/static-svg/icons/google.svg
+
+Thinking Machines mark: monochrome vector adaptation of the official site favicon,
+https://thinkingmachines.ai/images/favicon-16x16.png, used to identify its models.
+This mark is excluded from the project's MIT grant.
+
 Brand marks remain the property of their respective owners.
 
 MIT License
 
 Copyright (c) 2025 opencode
+Copyright (c) 2023 LobeHub
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

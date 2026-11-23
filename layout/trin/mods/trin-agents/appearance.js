@@ -9,13 +9,39 @@ import { contextTooltip, subagentsTooltip, shellsTooltip } from "./tooltips.js";
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 const LINE_HEIGHT = 18;
 const ICON_GAP = 7;
-// Presentation aliases only. Keep the real provider ID in metadata/tooltips;
-// never guess the provider from a model name (e.g. Kimi through OpenCode).
+// Only used when the model family is unknown. The provider ID stays in the tooltip.
 const PROVIDER_MARKS = {
-  openai: "openai", anthropic: "anthropic", ollama: "ollama",
+  openai: "openai", anthropic: "anthropic", google: "google", ollama: "ollama",
   "ollama-cloud": "ollama", kimi: "kimi", "kimi-for-coding": "kimi",
   "kimi-code-plan-cn": "kimi", opencode: "opencode", "opencode-go": "opencode",
 };
+
+const MODEL_MARKS = [
+  [/^(?:gpt|chatgpt)(?=$|[-_.:\s]|\d)|^o[134](?=$|[-_.:\s])/, "openai"],
+  [/^claude(?=$|[-_.:\s])|^(?:opus|sonnet|haiku|fable)(?=$|[-_\s]+\d)/, "anthropic"],
+  [/^(?:gemini|gemma)(?=$|[-_.:\s]|\d)/, "google"],
+  [/^inkling(?=$|[-_.:\s]|\d)/, "thinking-machines"],
+  [/^kimi(?=$|[-_.:\s]|\d)/, "kimi"],
+];
+
+function modelMark(modelID) {
+  // Catalogs and local runtimes can qualify the same model with a different
+  // namespace. Match the model component, not the namespace or a substring.
+  const name = modelID?.trim().split("/").at(-1).trim().toLowerCase() ?? "";
+  return MODEL_MARKS.find(([pattern]) => pattern.test(name))?.[1];
+}
+
+function brandIcon(mark, t) {
+  switch (mark) {
+    case "google":
+    case "thinking-machines":
+      return svg(`mods/trin-agents/model-${mark}.svg`).size(16).flex_none().text_color(t.muted);
+    case "opencode":
+      return svg("assets/trin-providers/opencode-logo.svg").w(10).h(12.5).flex_none().text_color(t.muted);
+    default:
+      return svg(`assets/trin-providers/${mark}.svg`).size(mark === "kimi" ? 16 : 20).flex_none().text_color(t.muted);
+  }
+}
 
 export function spaceAvatar(space, t) {
   const color = space?.color ?? (shared("space.colors") ?? {})[space?.id] ?? "ansi6";
@@ -51,8 +77,8 @@ function activityBadges(t, info, address) {
 
 export function sessionDetails(t, meta, activity, elapsed, address) {
   const provider = meta?.providerID;
-  const mark = Object.hasOwn(PROVIDER_MARKS, provider) ? PROVIDER_MARKS[provider] : null;
   const model = meta?.modelID;
+  const mark = modelMark(model) ?? (Object.hasOwn(PROVIDER_MARKS, provider) ? PROVIDER_MARKS[provider] : null);
   const modelTitle = model ? `${provider ?? "?"}/${model}${meta.variant ? ` · ${meta.variant}` : ""}` : "Model data unavailable";
   const timingTitle = "Accumulated session work time; runs continuously while status is Working"
     + (!meta?.durationReady ? "\nHistorical assistant-step total is still loading; showing locally observed work" : "");
@@ -60,8 +86,7 @@ export function sessionDetails(t, meta, activity, elapsed, address) {
     .child(h_flex().id(`agent-${address}-model`).flex_1().min_w(0).gap(ICON_GAP).items_center().tooltip(modelTitle)
       .child(h_flex().w(LINE_HEIGHT).h(LINE_HEIGHT).flex_none().items_center().justify_center()
         // Visible mark ~15px inside the 18px alignment column.
-        .when(Boolean(mark) && mark !== "opencode", el => el.child(svg(`assets/trin-providers/${mark}.svg`).size(mark === "kimi" ? 16 : 20).flex_none().text_color(t.muted)))
-        .when(mark === "opencode", el => el.child(svg("assets/trin-providers/opencode-logo.svg").w(10).h(12.5).flex_none().text_color(t.muted)))
+        .when(Boolean(mark), el => el.child(brandIcon(mark, t)))
         .when(!mark && Boolean(provider), el => el.child(div().font_semibold().child(provider[0].toUpperCase()))))
       .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(3).items_center()
         // Preserve the model's natural width first, capped by the available

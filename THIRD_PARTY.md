@@ -21,7 +21,10 @@ notice is retained at `docs/licenses/Lucide.txt`; brand logos are not Lucide ico
 ## Provider marks
 
 - `layout/trin/mods/trin-agents/PROVIDER-ICONS-LICENSE.txt`: OpenAI/Anthropic SVGs
-  from OpenCode v2.2.5, MIT notice retained.
+  from OpenCode v2.2.5 and the Google G from LobeHub Icons, MIT notices retained.
+- `layout/trin/mods/trin-agents/model-thinking-machines.svg`: monochrome vector
+  adaptation of the official Thinking Machines site favicon, used for model
+  identification; no trademark rights granted.
 - `layout/trin/mods/trin-quotas/PROVIDER-ICONS-LICENSE.txt`: Ollama/Kimi SVGs
   from LobeHub Icons, MIT notice retained.
 - `layout/trin/mods/trin-quotas/provider-opencode.svg`: unmodified official

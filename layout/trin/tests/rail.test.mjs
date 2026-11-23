@@ -32,7 +32,7 @@ function fixture() {
   }));
   const commands = [], badges = [], stored = {};
   const t = { accent: "#8ab4f8", chrome: "#101112", selected: "#25272b", muted: "#999999", dim: "#777777", idle: "#777777", working: "#d9bc65", blocked: "#e09080", done: "#8cb383" };
-  const context = { View: class {}, div: element, svg: element, h_flex: element, v_flex: element,
+  const context = { View: class {}, div: element, svg: path => element().asset(path), h_flex: element, v_flex: element,
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "",
     theme: () => t, props: () => ({}), layout: () => ({ id: "sidebar", size: { px: 44 } }),
     spaces: () => spaces, agents: () => agents, terminals: () => agents,
@@ -138,7 +138,7 @@ test("expanding the sidebar from the Agents rail preserves the quota height", ()
   ]);
 });
 
-test("Agents uses the same provider assets as subscriptions, retaining unknown-provider fallback", () => {
+test("Agents falls back to the existing provider assets or initial for unknown families", () => {
   const context = { div: element, svg: path => element().asset(path), h_flex: element,
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "" };
   vm.runInNewContext(read("trin-agents/appearance.js") + "\nthis.details = sessionDetails;", context);
@@ -159,7 +159,7 @@ test("Agents uses the same provider assets as subscriptions, retaining unknown-p
   assert.equal(nodes(unknown).some(n => n.attrs.asset), false);
   assert.ok(text(unknown).startsWith("C"));
   for (const [provider, mark] of [["kimi-code-plan-cn", "kimi"], ["kimi-for-coding", "kimi"], ["ollama-cloud", "ollama"], ["opencode-go", "opencode"]]) {
-    const root = context.details({ muted: "muted" }, { providerID: provider, modelID: "k3.1-pro-highspeed" }, null, null, "test");
+    const root = context.details({ muted: "muted" }, { providerID: provider, modelID: "unknown-model" }, null, null, "test");
     const icon = nodes(root).find(n => n.attrs.asset);
     const path = `assets/trin-providers/${mark === "opencode" ? "opencode-logo" : mark}.svg`;
     assert.equal(icon.attrs.asset[0], path);
@@ -171,8 +171,41 @@ test("Agents uses the same provider assets as subscriptions, retaining unknown-p
     assert.ok(byID(root, "agent-test-model").attrs.tooltip[0].startsWith(provider + "/"));
     assert.equal(nodes(root).some(n => n.childNodes.includes(provider[0].toUpperCase())), false);
   }
-  const routed = context.details({}, { providerID: "custom", modelID: "kimi-k3.1" }, null, null, "test");
-  assert.equal(nodes(routed).some(n => n.attrs.asset), false, "model name is not provider identity");
+});
+
+test("Agents updates the family mark from the current model without changing provider metadata", () => {
+  const { panel, context } = fixture();
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  for (const [providerID, modelID, path] of [
+    ["openrouter", "openai/gpt-5.5", "assets/trin-providers/openai.svg"],
+    ["custom", "GPT 5.5", "assets/trin-providers/openai.svg"],
+    ["opencode-go", "o4-mini", "assets/trin-providers/openai.svg"],
+    ["custom", "claude-haiku-4-5", "assets/trin-providers/anthropic.svg"],
+    ["openrouter", "anthropic/claude-sonnet-5", "assets/trin-providers/anthropic.svg"],
+    ["openai", "Opus 5.5", "assets/trin-providers/anthropic.svg"],
+    ["openrouter", "anthropic/claude-fable-5.2", "assets/trin-providers/anthropic.svg"],
+    ["openrouter", "google/gemini-3.1-pro-preview:free", "mods/trin-agents/model-google.svg"],
+    ["google", "gemini-3.1-flash", "mods/trin-agents/model-google.svg"],
+    ["ollama", "gemma4:31b", "mods/trin-agents/model-google.svg"],
+    ["ollama", "inkling-2-mini:26b-a5b", "mods/trin-agents/model-thinking-machines.svg"],
+    ["local", "thinkingmachines/Inkling-2-Mini", "mods/trin-agents/model-thinking-machines.svg"],
+    ["opencode-go", "moonshotai/kimi-k2.5", "assets/trin-providers/kimi.svg"],
+    ["ollama", "gpt-tools/not-inkling", "assets/trin-providers/ollama.svg"],
+    ["opencode-go", "fablewriter", "assets/trin-providers/opencode-logo.svg"],
+    ["custom", "google/geminized", null],
+    ["custom", undefined, null],
+    [undefined, "gemini-3.1-pro", "mods/trin-agents/model-google.svg"],
+  ]) {
+    panel.activity.details = () => ({ providerID, modelID, variant: "medium" });
+    const row = byID(panel.render(), "agent-t0-model");
+    const icon = nodes(row).find(n => n.attrs.asset);
+    assert.equal(icon?.attrs.asset[0] ?? null, path, `${providerID}/${modelID}`);
+    assert.equal(row.attrs.tooltip[0], modelID ? `${providerID ?? "?"}/${modelID} · medium` : "Model data unavailable");
+    if (path?.startsWith("mods/")) {
+      assert.equal(icon.attrs.size[0], 16);
+      assert.ok(fs.existsSync(new URL(`../${path}`, import.meta.url)), path);
+    }
+  }
 });
 
 test("spaces rail shows all project avatars even for folded machines and selects by ID", () => {

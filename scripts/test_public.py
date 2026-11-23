@@ -71,6 +71,10 @@ class InstallTest(unittest.TestCase):
             self.assertEqual((root / "assets/trin-providers/opencode-logo.svg").read_bytes(),
                              (installer.ROOT / "layout/trin/mods/trin-quotas/provider-opencode.svg").read_bytes())
             self.assertFalse((root / "assets/trin-providers/openai.svg").is_symlink())
+            for name in ("model-google.svg", "model-thinking-machines.svg"):
+                asset = Path("mods/trin-agents") / name
+                self.assertEqual((root / asset).read_bytes(),
+                                 (installer.ROOT / "layout/trin" / asset).read_bytes())
             self.assertFalse((root / "mods/trin-quotas/gpui-kit.d.ts").exists())
             with self.assertRaises(ValueError):
                 installer.install(root)
