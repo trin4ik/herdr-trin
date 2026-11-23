@@ -21,6 +21,21 @@ OpenCode запускает экземпляр плагина на каждый 
 процесса. Экземпляры (и версии) делят только список уже взятых `id` событий, поэтому
 строка пишется один раз. Оставшиеся повторы (например, при смене версии) удаляет импортёр.
 
+## Лимиты Claude из ответов
+
+Провайдер OpenCode `claude-agent` (Claude Code harness) передаёт `rate_limit_event`
+каждого ответа Claude в `native.rateLimit` события `session.step.ended/failed`.
+Плагин переводит `unifiedWindows` (`five_hour`, `seven_day`, `seven_day_<модель>`)
+в файл наблюдения quota-hub `~/.local/state/quota-hub/bridge/claude.latest.json`
+(`source: opencode-claude-agent`, тот же формат, что у header bridge). Запись
+атомарная (temp + rename), каталог 0700, файл 0600, более старый ответ не
+перезаписывает более новый. Запросов к Anthropic нет: нет ответов — нет обновлений.
+
+Опции: `claudeQuotaFile` — абсолютный путь файла; `claudeProviders` — список ID
+провайдеров (по умолчанию `["claude-agent"]`). Аккаунт в событии не указан:
+все перечисленные провайдеры должны работать на одном аккаунте Claude, иначе
+снимки разных аккаунтов перепишут друг друга.
+
 Подключение: добавить абсолютный путь к каталогу пакета в `plugins` в `opencode.jsonc`:
 
 ```jsonc

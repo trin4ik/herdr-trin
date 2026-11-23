@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises"
 import os from "node:os"
 import { isAbsolute, join } from "node:path"
+import { claudeProviders, quotaFileOption, toObservation, writeObservation } from "./ratelimit.mjs"
 
 export const PLUGIN_ID = "quota-hub.usage-bridge"
 const types = ["session.step.started", "session.step.ended", "session.step.failed", "session.usage.recorded"]
@@ -51,9 +52,22 @@ export function toLine(event, starts) {
   }
 }
 
+// rateLimitOf returns Claude's rate_limit_info of a finished step of a Claude provider.
+export function rateLimitOf(event, starts, providers) {
+  try {
+    if (event?.type !== "session.step.ended" && event?.type !== "session.step.failed") return null
+    const data = event.data
+    const provider = starts.get(`${data?.sessionID}\0${data?.assistantMessageID}`)?.provider
+    if (!providers.includes(provider)) return null
+    return toObservation(data.native?.rateLimit, event.created)
+  } catch {
+    return null
+  }
+}
+
 // Every location instance in one OpenCode process receives every event. Instances
 // and versions share only which events were already taken, so each is written once.
-const shared = () => globalThis[Symbol.for("quota-hub.usage-bridge.v1")] ??= { seen: new Map(), starts: new Map() }
+const shared = () => globalThis[Symbol.for("quota-hub.usage-bridge.v1")] ??= { seen: new Map(), starts: new Map(), limits: {} }
 
 function claim(seen, event) {
   if (event?.type === "session.step.started" || !types.includes(event?.type) || typeof event.id !== "string") return true
@@ -65,7 +79,10 @@ function claim(seen, event) {
 
 export async function setupBridge(ctx) {
   const controller = new AbortController()
-  const { seen, starts } = shared()
+  const state = shared()
+  const { seen, starts } = state
+  state.limits ??= {}
+  let limits = Promise.resolve()
   let chain = Promise.resolve(), iterator, ready = false, lastError = -Infinity
   let stop
   const stopped = new Promise((resolve) => { stop = resolve })
@@ -81,6 +98,8 @@ export async function setupBridge(ctx) {
     const directory = ctx.options?.directory
     const dir = typeof directory === "string" && isAbsolute(directory)
       ? directory : join(baseDir(), "events")
+    const quotaFile = quotaFileOption(ctx.options?.claudeQuotaFile)
+    const providers = claudeProviders(ctx.options?.claudeProviders)
     const stream = ctx.event.subscribe({ types, signal: controller.signal })
     iterator = stream[Symbol.asyncIterator]()
     pump = (async () => {
@@ -88,6 +107,10 @@ export async function setupBridge(ctx) {
         const next = await Promise.race([iterator.next(), stopped])
         if (!next || next.done || controller.signal.aborted) break
         if (!claim(seen, next.value)) continue
+        const observation = rateLimitOf(next.value, starts, providers)
+        if (observation) {
+          limits = limits.then(() => writeObservation(quotaFile, observation, state.limits)).catch(report)
+        }
         const line = toLine(next.value, starts)
         if (!line) continue
         chain = chain.then(async () => {
@@ -111,7 +134,7 @@ export async function setupBridge(ctx) {
       let timer
       try {
         await Promise.race([
-          pump.then(() => chain),
+          pump.then(() => Promise.all([chain, limits])),
           new Promise((resolve) => { timer = setTimeout(resolve, 2000) }),
         ])
       } finally {

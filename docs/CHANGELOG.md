@@ -1,5 +1,14 @@
 # Публичный журнал
 
+## 2026-11-23 — лимиты Claude только из ответов Claude Code
+
+- `opencode-usage-bridge` берёт `rate_limit_event` ответов провайдера
+  `claude-agent` из `native.rateLimit` шага и пишет файл наблюдения quota-hub.
+  Окна 5 ч, неделя и недельные окна моделей; ноль сохраняется как значение.
+- quota-hub принимает этот источник (`opencode-claude-agent`) наравне с
+  header bridge. Без `claude_fallback` сервис не делает запросов к Anthropic.
+- Проверены 20 тестов плагина и `go test ./...`.
+
 ## 2026-11-23 — логотипы семейств моделей в Agents
 
 - `trin-agents/appearance.js` выбирает логотип по модели, независимо от

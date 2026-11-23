@@ -7,7 +7,7 @@ Headless Go-сборщик → private last-good/history/cooldown → норма
 | Провайдер | Реальный источник | Ограничение |
 | --- | --- | --- |
 | Codex | Native `.codex/auth.json`, access token/account → usage GET | Не любой OpenCode token-sharing вход; expiry обновляет native CLI |
-| Claude | Passive headers + native usage GET; native `.claude/.credentials.json` | Keychain не читается; нативный GET даёт все окна, включая лимит по модели |
+| Claude | Passive: `rate_limit_event` ответов провайдера `claude-agent` (Claude Code в OpenCode) через `opencode-usage-bridge` или headers провайдера `anthropic`; опционально native usage GET | Без `claude_fallback` запросов к Anthropic нет; данные обновляются только ответами Claude |
 | Claude proxy | Отдельный read-only HTTPS `/v1/subscription-limits` с выделенным Bearer | Нет данных/ошибка = unavailable или stale; секрет только в env |
 | Ollama | Active key `ollama-cloud` из OpenCode `/api/credential` | Нужен доступ к owning service |
 | Kimi | Active key явно выбранной `kimi-code-plan-cn` или `kimi-code-plan-global` | Не угадывать регион по имени аккаунта |

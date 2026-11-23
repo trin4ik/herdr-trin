@@ -745,6 +745,33 @@ func TestClaudeObserved(t *testing.T) {
 	}
 }
 
+func TestClaudeAgentObservationIsAccepted(t *testing.T) {
+	q := `{"name":"anthropic-ratelimit-unified-5h-utilization","type":"number","value":0.02},
+	      {"name":"anthropic-ratelimit-unified-5h-reset","type":"time","value":"2026-11-04T14:00:00.000Z"},
+	      {"name":"anthropic-ratelimit-unified-7d-utilization","type":"number","value":0}`
+	body := bytes.Replace(obsJSON("2026-11-04T11:00:00Z", 200, q), []byte("opencode-http-response-hook"), []byte("opencode-claude-agent"), 1)
+	c, _ := New(claudeSpec(writeObs(t, body)), opts(nil))
+	res, err := c.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := quotaByID(t, res, "five_hour"); !approx(f.UsedPercent, 2) || f.Window.ResetAt == nil {
+		t.Fatalf("%+v", f)
+	}
+	// Zero is a reported value, not unknown.
+	if s := quotaByID(t, res, "seven_day"); !approx(s.UsedPercent, 0) {
+		t.Fatalf("%+v", s)
+	}
+	if !bytes.Contains(res.Raw, []byte(`"source":"opencode-claude-agent"`)) {
+		t.Fatalf("raw source: %s", res.Raw)
+	}
+	other := bytes.Replace(obsJSON("2026-11-04T11:00:00Z", 200, q), []byte("opencode-http-response-hook"), []byte("opencode-other"), 1)
+	c, _ = New(claudeSpec(writeObs(t, other)), opts(nil))
+	if _, err := c.Fetch(context.Background()); errInfo(t, err).Code != CodeInvalidResponse {
+		t.Fatalf("unknown source accepted: %v", err)
+	}
+}
+
 func TestClaude429ExhaustedIsData(t *testing.T) {
 	q := `{"name":"anthropic-ratelimit-unified-5h-utilization","type":"number","value":1},
 	      {"name":"anthropic-ratelimit-unified-5h-reset","type":"time","value":"2026-11-04T14:00:00Z"}`

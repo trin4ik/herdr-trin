@@ -3,7 +3,8 @@
 Общие правила: `../CONTRIBUTING.md`. Только stdlib Go, без смены провайдера/SDK
 и без LLM-генераций: этот сервис читает usage, не вызывает модели.
 
-- Источники: native Codex OAuth; Claude passive headers + native OAuth fallback;
+- Источники: native Codex OAuth; Claude passive (`rate_limit_event` ответов
+  `claude-agent` через usage-bridge или headers) + опциональный native OAuth fallback;
   Ollama/Kimi — allowlisted активные ключи OpenCode credential API;
   OpenCode Go — активная интеграция `opencode` того же credential API → только Go usage.
 - Никогда не обновлять/ротировать credentials, не вызывать auth resolver или

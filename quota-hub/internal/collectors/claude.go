@@ -14,6 +14,9 @@ import (
 const (
 	claudeHeaderPrefix = "anthropic-ratelimit-unified-"
 	observerSource     = "opencode-http-response-hook"
+	// claudeAgentSource is written by opencode-usage-bridge from the rate_limit_event
+	// Claude Code sends with every answer of the OpenCode claude-agent provider.
+	claudeAgentSource = "opencode-claude-agent"
 )
 
 var claudeHeaderRE = regexp.MustCompile(`^anthropic-ratelimit-unified-(.+)-(utilization|reset)$`)
@@ -49,7 +52,7 @@ func (c *claudeCollector) Fetch(ctx context.Context) (model.Result, error) {
 		return model.Result{}, fail(CodeSourceUnavailable)
 	}
 	var obs observation
-	if json.Unmarshal(data, &obs) != nil || obs.SchemaVersion != 1 || obs.Source != observerSource ||
+	if json.Unmarshal(data, &obs) != nil || obs.SchemaVersion != 1 || (obs.Source != observerSource && obs.Source != claudeAgentSource) ||
 		obs.ProviderID != "anthropic" || !(obs.Status/100 == 2 || obs.Status == http.StatusTooManyRequests) {
 		return model.Result{}, fail(CodeInvalidResponse)
 	}
@@ -117,7 +120,7 @@ func (c *claudeCollector) Fetch(ctx context.Context) (model.Result, error) {
 	if len(quotas) == 0 {
 		return model.Result{}, fail(CodeInvalidResponse)
 	}
-	clean := observation{SchemaVersion: 1, Source: observerSource, ObservedAt: at.Format(time.RFC3339Nano), ProviderID: "anthropic", Status: obs.Status, Quota: kept}
+	clean := observation{SchemaVersion: 1, Source: obs.Source, ObservedAt: at.Format(time.RFC3339Nano), ProviderID: "anthropic", Status: obs.Status, Quota: kept}
 	raw, _ := json.Marshal(clean)
 	return finish(at, nil, quotas, nil, raw)
 }
