@@ -18,7 +18,7 @@ rev=$(git rev-parse --short=12 HEAD)
 out="$HOME/.local/share/quota-hub/releases/$rev"
 mkdir -p "$out/opencode-usage-bridge"
 CGO_ENABLED=0 go build -trimpath -o "$out/quota-usage" ./cmd/quota-usage
-git -C .. archive HEAD:quota-hub/tools/opencode-usage-bridge package.json server.ts bridge.mjs \
+git -C .. archive HEAD:quota-hub/tools/opencode-usage-bridge package.json server.ts bridge.mjs ratelimit.mjs \
   | tar -x -C "$out/opencode-usage-bridge"
 ```
 
