@@ -139,7 +139,9 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 				key := windowKey(subscription.ID, quota.ID)
 				previous, exists := s.QuotaWindows[key]
 				reset := quota.Window.ResetAt.UTC()
-				if exists && reset.Sub(previous.Reset) >= -120*time.Second && reset.Sub(previous.Reset) <= 120*time.Second {
+				// A changed provider binding re-records the same window, so its calls count from now on.
+				if exists && previous.Provider == *subscription.OpenCodeProvider &&
+					reset.Sub(previous.Reset) >= -120*time.Second && reset.Sub(previous.Reset) <= 120*time.Second {
 					continue
 				}
 				window := QuotaWindow{

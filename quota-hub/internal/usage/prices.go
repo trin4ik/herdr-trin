@@ -31,6 +31,7 @@ type cost struct {
 }
 type model struct {
 	CanonicalModelID string `json:"canonical_model_id"`
+	ReleaseDate      string `json:"release_date"`
 	Cost             *cost  `json:"cost"`
 	Experimental     struct {
 		Modes map[string]struct {
@@ -93,6 +94,9 @@ func modeTable(base, mode *cost) (rate, []tier) {
 func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
 	entry, ok := s[provider]
 	if !ok {
+		if resolved, ok := s.claudeAgentAlias(provider, id); ok {
+			return s.lookup(claudeAgentFirstParty, resolved)
+		}
 		return s.lookupByModelID(id)
 	}
 	models := entry.Models
@@ -109,6 +113,36 @@ func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
 		}
 	}
 	return rate{}, nil, false
+}
+
+const (
+	claudeAgentProvider   = "claude-agent"
+	claudeAgentFirstParty = "anthropic"
+)
+
+var claudeAgentFamilies = map[string]bool{"opus": true, "sonnet": true, "haiku": true, "fable": true}
+
+// claudeAgentAlias resolves a Claude Code model alias (opus, sonnet, haiku, fable)
+// of the OpenCode claude-agent provider to the newest Anthropic model of that family
+// in the catalog, which is the model Claude Code runs for the alias. It is an
+// estimate: a catalog that lists a model before Claude Code switches to it prices
+// the newer model.
+func (s snapshot) claudeAgentAlias(provider, id string) (string, bool) {
+	if provider != claudeAgentProvider || !claudeAgentFamilies[id] {
+		return "", false
+	}
+	prefix := "claude-" + id + "-"
+	best, bestDate := "", ""
+	for modelID, m := range s[claudeAgentFirstParty].Models {
+		rest, ok := strings.CutPrefix(modelID, prefix)
+		if !ok || rest == "" || rest[0] < '0' || rest[0] > '9' || m.Cost == nil || len(m.ReleaseDate) != len("2006-01-02") {
+			continue
+		}
+		if m.ReleaseDate > bestDate || (m.ReleaseDate == bestDate && modelID < best) {
+			best, bestDate = modelID, m.ReleaseDate
+		}
+	}
+	return best, best != ""
 }
 
 // lookupByModelID uses exact catalog matches to identify the first-party

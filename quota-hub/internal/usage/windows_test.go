@@ -118,6 +118,22 @@ func TestQuotaInstances(t *testing.T) {
 	if strings.Contains(string(b), "usedPercent") {
 		t.Fatal(string(b))
 	}
+	// Rebinding the subscription to another OpenCode provider re-records the
+	// current windows, so calls of the new provider count from now on.
+	write(t, filepath.Join(i.Dir, "events", "b.jsonl"), addEvent("agent", "claude-agent", "opus", now.Add(-10*time.Minute)))
+	mu.Lock()
+	status = http.StatusOK
+	snapshot.Subscriptions[0].OpenCodeProvider = pointer("claude-agent")
+	mu.Unlock()
+	rebound := cycle(t, i)
+	instances, _ = readQuotaWindows(i.Dir)
+	if len(instances) != 9 || rebound.Current[0].Provider != "claude-agent" || rebound.Current[0].Calls != 1 {
+		t.Fatalf("%d %+v", len(instances), rebound.Current)
+	}
+	cycle(t, i)
+	if instances, _ = readQuotaWindows(i.Dir); len(instances) != 9 {
+		t.Fatal(len(instances))
+	}
 }
 
 func TestQuotaPartialAndModelMatching(t *testing.T) {

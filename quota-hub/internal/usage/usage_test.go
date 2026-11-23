@@ -438,3 +438,37 @@ func TestDayCacheLimit(t *testing.T) {
 		t.Fatalf("cached %d days", len(i.ids))
 	}
 }
+
+func TestClaudeAgentAliasUsesNewestAnthropicFamilyModel(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(`{"anthropic":{"models":{
+		"claude-opus-5":{"canonical_model_id":"anthropic/claude-opus-5","release_date":"2026-07-24","cost":{"input":5,"output":25}},
+		"claude-opus-5-5":{"release_date":"2026-09-22","cost":{"input":4,"output":20}},
+		"claude-opus-next":{"release_date":"2026-12-01","cost":{"input":9}},
+		"claude-opus-6-preview":{"release_date":"bad","cost":{"input":9}},
+		"claude-opus-7":{"release_date":"2026-12-02"},
+		"claude-haiku-4-5":{"release_date":"2025-10-15","cost":{"input":1}},
+		"claude-haiku-4-5-20251001":{"release_date":"2025-10-15","cost":{"input":2}}
+	}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		provider, model string
+		want            float64
+		priced          bool
+	}{
+		{"claude-agent", "opus", 4, true},
+		{"claude-agent", "haiku", 1, true},
+		{"claude-agent", "sonnet", 0, false},
+		{"claude-agent", "Opus", 0, false},
+		{"other", "opus", 0, false},
+		{"claude-agent", "claude-opus-5", 5, true},
+	} {
+		usd, price := i.price(Event{Provider: &tt.provider, Model: &tt.model, Tokens: Tokens{Input: 1e6}})
+		if tt.priced != (usd != nil && price.Status == "ok") || (tt.priced && *usd != tt.want) {
+			t.Fatalf("%s/%s: usd %v price %+v", tt.provider, tt.model, usd, price)
+		}
+	}
+}

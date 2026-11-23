@@ -88,6 +88,14 @@ func New(spec Spec, opts Options) (Collector, error) {
 			}
 			return h, nil
 		}
+		if spec.ClaudeProfile {
+			// The hybrid only lends its local profile reader: no endpoint, never Fetch.
+			h, err := newClaudeHybrid(spec, b, "")
+			if err != nil {
+				return nil, err
+			}
+			return &claudePassiveProfile{claudeCollector: &claudeCollector{base: b}, profile: h}, nil
+		}
 		return &claudeCollector{base: b}, nil
 	case spec.Provider == ProviderOpenCode && spec.Source == SourceOpenCodeConsole:
 		// The Console credential comes from the local OpenCode service, exactly

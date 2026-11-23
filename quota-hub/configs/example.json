@@ -14,6 +14,16 @@
       "interval": "5m"
     },
     {
+      "id": "claude-agent-passive", "provider": "claude", "enabled": false,
+      "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
+      "interval": "30s", "opencode_provider": "claude-agent",
+      "claude_profile": {
+        "credential_file": "/absolute/path/to/.claude/.credentials.json",
+        "account_file": "/absolute/path/to/.claude.json",
+        "expected_account_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
       "id": "claude-primary", "provider": "claude", "enabled": false,
       "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
       "interval": "5m", "observe_interval": "30s",

@@ -401,3 +401,38 @@ func TestClaudeHybridUsesNativeCredentialsAndSeparateIntervals(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudePassiveProfileAndUsageProvider(t *testing.T) {
+	c := valid(t)
+	c.Subscriptions[3].ClaudeProfile = &ClaudeProfile{CredentialFile: "/not-opened/.credentials.json",
+		AccountFile: "/not-opened/.claude.json", ExpectedAccountSHA256: strings.Repeat("a", 64)}
+	c.Subscriptions[3].OpenCodeProvider = "claude-agent"
+	specs, err := c.Specs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := specs[3]
+	if s.ClaudeNative || !s.ClaudeProfile || s.CredentialFile != "/not-opened/.credentials.json" ||
+		s.ClaudeAccountFile != "/not-opened/.claude.json" || s.OpenCodeProvider == nil || *s.OpenCodeProvider != "claude-agent" {
+		t.Fatalf("%+v", s)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"relative credentials": func(c *Config) { c.Subscriptions[3].ClaudeProfile.CredentialFile = "x.json" },
+		"relative account":     func(c *Config) { c.Subscriptions[3].ClaudeProfile.AccountFile = "x.json" },
+		"no pin":               func(c *Config) { c.Subscriptions[3].ClaudeProfile.ExpectedAccountSHA256 = "" },
+		"with fallback": func(c *Config) {
+			c.Subscriptions[3].ClaudeFallback = &ClaudeFallback{Enabled: true, CredentialFile: "/c.json"}
+		},
+		"unsafe provider": func(c *Config) { c.Subscriptions[3].OpenCodeProvider = "Claude Agent" },
+		"other provider":  func(c *Config) { c.Subscriptions[0].OpenCodeProvider = "claude-agent" },
+	} {
+		base := valid(t)
+		p := *c.Subscriptions[3].ClaudeProfile
+		base.Subscriptions[3].ClaudeProfile = &p
+		base.Subscriptions[3].OpenCodeProvider = "claude-agent"
+		mutate(&base)
+		if _, err := base.Specs(); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}

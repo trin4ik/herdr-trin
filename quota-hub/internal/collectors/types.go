@@ -67,6 +67,12 @@ type Spec struct {
 	ClaudeExpectedAccountSHA256 string
 	ClaudeProxyURL              string
 	ClaudeProxyTokenEnv         string
+	// ClaudeProfile reads e-mail and plan of a passive subscription from the
+	// local Claude Code files; the passive collector stays network-free.
+	ClaudeProfile bool
+	// UsageProviderOverride names the OpenCode provider whose calls consume a
+	// passive Claude subscription.
+	UsageProviderOverride string
 }
 
 // Options provides test seams. Production configuration cannot override upstream endpoints.
@@ -78,6 +84,10 @@ type Options struct {
 
 // UsageProvider identifies the OpenCode calls that consume this subscription.
 func (s Spec) UsageProvider() *string {
+	if s.UsageProviderOverride != "" {
+		provider := s.UsageProviderOverride
+		return &provider
+	}
 	var provider string
 	switch {
 	case s.Provider == ProviderClaude && s.Source == SourceClaudeProxy:

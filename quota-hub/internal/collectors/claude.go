@@ -149,3 +149,31 @@ func claudeWindow(token string) (string, *string, model.Window) {
 	}
 	return id + "_" + slug(rest), sptr(strings.ReplaceAll(rest, "_", "-")), w
 }
+
+// claudePassiveProfile is a passive-only Claude subscription that also shows the
+// account e-mail and plan from local Claude Code files. Usage comes only from the
+// observation file; nothing here performs network I/O.
+type claudePassiveProfile struct {
+	*claudeCollector
+	profile *claudeHybrid
+}
+
+func (c *claudePassiveProfile) MetadataIdentity() (string, error) {
+	return c.profile.MetadataIdentity()
+}
+
+func (c *claudePassiveProfile) ReadLocalProfile(ctx context.Context) (*model.Profile, error) {
+	return c.profile.ReadLocalProfile(ctx)
+}
+
+// Fetch attaches the local profile to the passive observation when it is readable.
+func (c *claudePassiveProfile) Fetch(ctx context.Context) (model.Result, error) {
+	res, err := c.claudeCollector.Fetch(ctx)
+	if err != nil {
+		return res, err
+	}
+	if p, perr := c.profile.ReadLocalProfile(ctx); perr == nil && p != nil {
+		res.Profile, res.Plan = p, p.Plan
+	}
+	return res, nil
+}

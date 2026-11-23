@@ -96,6 +96,17 @@ Claude account metadata/email требует отдельного account_file (
 файл с project history и не включает account pin. Не путайте unknown profile с
 ошибкой квоты. Подключение профиля — явное локальное решение, не auto-discovery.
 
+Пассивная подписка без запросов к Anthropic (только ответы Claude Code через
+`opencode-usage-bridge`): без `claude_fallback`, с `"opencode_provider": "claude-agent"`,
+чтобы вызовы этого провайдера считались в окнах, и с блоком `claude_profile`
+(`credential_file`, `account_file`, `expected_account_sha256`). Профиль (e-mail и
+`subscriptionType`) читается только из локальных файлов Claude Code; истёкший
+access token скрывает профиль до обновления самим Claude Code, квоты остаются.
+Смена `opencode_provider` перезаписывает текущие окна в `windows.jsonl`, вызовы
+нового провайдера считаются с этого момента. Модели-псевдонимы `claude-agent`
+(`opus`, `sonnet`, `haiku`, `fable`) оцениваются по самой новой модели семейства
+у `anthropic` в models.dev; это оценка, а не точный ID модели вызова.
+
 ## OpenCode Go
 
 Подписка `provider: opencode`, product `opencode_go`, читает только платные

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -515,5 +516,46 @@ func TestClaudeHybridProductionEndpointFixed(t *testing.T) {
 	h := c.(*claudeHybrid)
 	if h.endpoint != "https://api.anthropic.com/api/oauth/usage" || strings.Contains(h.endpoint, "?") {
 		t.Fatalf("endpoint %q", h.endpoint)
+	}
+}
+
+type failTransport struct{ t *testing.T }
+
+func (f failTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	f.t.Errorf("unexpected network request to %s", r.URL.Host)
+	return nil, errors.New("no network")
+}
+
+func TestClaudePassiveProfileIsNetworkFree(t *testing.T) {
+	s := claudeSpec(writeObs(t, fixture(t, "claude_observation.json")))
+	s.CredentialFile = writeOAuthCreds(t, fakeNow.Add(time.Hour).UnixMilli())
+	s.ClaudeAccountFile = writeAccountFile(t, oauthTestUUID)
+	s.ClaudeExpectedAccountSHA256 = pinOf(oauthTestUUID)
+	s.ClaudeProfile = true
+	o := opts(nil)
+	o.HTTPClient = &http.Client{Transport: failTransport{t}}
+	c, err := New(s, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.(HybridCollector); ok {
+		t.Fatalf("%T must not implement HybridCollector", c)
+	}
+	if _, ok := c.(ProfileIdentity); !ok {
+		t.Fatal("profile identity missing")
+	}
+	p, err := c.(LocalProfileCollector).ReadLocalProfile(context.Background())
+	if err != nil || p.AccountEmail == nil || *p.AccountEmail != oauthTestEmail || p.Plan == nil || *p.Plan != "max" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	res, err := c.Fetch(context.Background())
+	if err != nil || len(res.Quotas) != 2 || res.Plan == nil || *res.Plan != "max" || res.Profile == nil {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// Another account in the local files hides the profile but keeps the quota.
+	s.ClaudeExpectedAccountSHA256 = pinOf("someone-else")
+	c, _ = New(s, o)
+	if res, err := c.Fetch(context.Background()); err != nil || res.Profile != nil || len(res.Quotas) != 2 {
+		t.Fatalf("%+v %v", res, err)
 	}
 }

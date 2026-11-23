@@ -68,7 +68,13 @@ type Subscription struct {
 	VerifiedEmail   string          `json:"verified_account_email,omitempty"`
 	ObserveInterval string          `json:"observe_interval,omitempty"`
 	ClaudeFallback  *ClaudeFallback `json:"claude_fallback,omitempty"`
-	Retry           Retry           `json:"retry,omitempty"`
+	// ClaudeProfile reads the account e-mail and plan of a passive-only Claude
+	// subscription from local Claude Code files. It never performs network I/O.
+	ClaudeProfile *ClaudeProfile `json:"claude_profile,omitempty"`
+	// OpenCodeProvider overrides the OpenCode provider whose calls consume a
+	// passive Claude subscription (for example claude-agent).
+	OpenCodeProvider string `json:"opencode_provider,omitempty"`
+	Retry            Retry  `json:"retry,omitempty"`
 }
 
 type ClaudeFallback struct {
@@ -76,6 +82,12 @@ type ClaudeFallback struct {
 	CredentialFile        string `json:"credential_file,omitempty"`
 	AccountFile           string `json:"account_file,omitempty"`
 	ExpectedAccountSHA256 string `json:"expected_account_sha256,omitempty"`
+}
+
+type ClaudeProfile struct {
+	CredentialFile        string `json:"credential_file"`
+	AccountFile           string `json:"account_file"`
+	ExpectedAccountSHA256 string `json:"expected_account_sha256"`
 }
 
 type Retry struct {
@@ -206,6 +218,9 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		OpenCodeURL: strings.TrimRight(c.OpenCode.URL, "/"), OpenCodeBearerEnv: c.OpenCode.TokenEnv,
 		OpenCodeServiceFile: c.OpenCode.ServiceFile}
 	interval, stale := 5*time.Minute, 30*time.Minute
+	if (entry.Provider != "claude" || entry.Source == collectors.SourceClaudeProxy) && (entry.ClaudeProfile != nil || entry.OpenCodeProvider != "") {
+		return s, errors.New("claude_profile and opencode_provider are only valid for observed claude subscriptions")
+	}
 	if entry.Provider != "claude" && entry.Provider != "opencode" && (entry.ClaudeFallback != nil || entry.ObserveInterval != "") {
 		return s, errors.New("Claude fallback and observe_interval are only valid for claude and opencode")
 	}
@@ -307,6 +322,24 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 			}
 		} else if entry.ObserveInterval != "" {
 			return s, errors.New("observe_interval requires enabled claude_fallback; passive-only sources use interval")
+		}
+		if p := entry.ClaudeProfile; p != nil {
+			if s.ClaudeNative {
+				return s, errors.New("claude_profile is for passive-only subscriptions; claude_fallback already reads the profile")
+			}
+			if !filepath.IsAbs(p.CredentialFile) || strings.ContainsRune(p.CredentialFile, 0) ||
+				!filepath.IsAbs(p.AccountFile) || strings.ContainsRune(p.AccountFile, 0) ||
+				!accountFingerprint.MatchString(p.ExpectedAccountSHA256) {
+				return s, errors.New("claude_profile requires absolute credential_file and account_file and a lowercase SHA256 account hash")
+			}
+			s.CredentialFile, s.ClaudeAccountFile, s.ClaudeExpectedAccountSHA256 = p.CredentialFile, p.AccountFile, p.ExpectedAccountSHA256
+			s.ClaudeProfile = true
+		}
+		if entry.OpenCodeProvider != "" {
+			if !identifier.MatchString(entry.OpenCodeProvider) {
+				return s, errors.New("opencode_provider must be a safe OpenCode provider ID")
+			}
+			s.UsageProviderOverride = entry.OpenCodeProvider
 		}
 	case "opencode":
 		// Paid OpenCode Go. The credential is the Console
