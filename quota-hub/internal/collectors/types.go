@@ -70,9 +70,9 @@ type Spec struct {
 	// ClaudeProfile reads e-mail and plan of a passive subscription from the
 	// local Claude Code files; the passive collector stays network-free.
 	ClaudeProfile bool
-	// UsageProviderOverride names the OpenCode provider whose calls consume a
-	// passive Claude subscription.
-	UsageProviderOverride string
+	// UsageProvidersOverride names the OpenCode providers whose calls consume a
+	// Claude subscription.
+	UsageProvidersOverride []string
 }
 
 // Options provides test seams. Production configuration cannot override upstream endpoints.
@@ -82,10 +82,29 @@ type Options struct {
 	Now        func() time.Time
 }
 
-// UsageProvider identifies the OpenCode calls that consume this subscription.
+// ClaudeUsageProviders are the OpenCode providers that use a Claude subscription
+// directly: the Anthropic API provider and the Claude Code harness. Each prices its
+// own calls; the subscription shows their total.
+var ClaudeUsageProviders = []string{"anthropic", "claude-agent"}
+
+// UsageProviders lists every OpenCode provider whose calls consume this subscription.
+func (s Spec) UsageProviders() []string {
+	if len(s.UsageProvidersOverride) > 0 {
+		return append([]string(nil), s.UsageProvidersOverride...)
+	}
+	if s.Provider == ProviderClaude && s.Source != SourceClaudeProxy {
+		return append([]string(nil), ClaudeUsageProviders...)
+	}
+	if p := s.UsageProvider(); p != nil {
+		return []string{*p}
+	}
+	return nil
+}
+
+// UsageProvider identifies the primary OpenCode provider of this subscription.
 func (s Spec) UsageProvider() *string {
-	if s.UsageProviderOverride != "" {
-		provider := s.UsageProviderOverride
+	if len(s.UsageProvidersOverride) > 0 {
+		provider := s.UsageProvidersOverride[0]
 		return &provider
 	}
 	var provider string

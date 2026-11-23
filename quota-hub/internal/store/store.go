@@ -317,16 +317,17 @@ func (s *Store) Snapshot(now time.Time) model.Snapshot {
 func view(e *entry, now time.Time) model.Subscription {
 	st := e.st
 	sub := model.Subscription{
-		OpenCodeProvider: cloneStr(e.def.OpenCodeProvider),
-		ID:               e.def.ID,
-		Provider:         e.def.Provider,
-		Product:          e.def.Product,
-		Source:           e.def.Source,
-		LastAttemptAt:    cloneTime(st.LastAttemptAt),
-		NextAttemptAt:    cloneTime(st.NextAttemptAt),
-		Error:            cloneErr(st.Error),
-		Quotas:           []model.Quota{},
-		Metrics:          []model.Metric{},
+		OpenCodeProvider:  cloneStr(e.def.OpenCodeProvider),
+		OpenCodeProviders: append([]string(nil), e.def.OpenCodeProviders...),
+		ID:                e.def.ID,
+		Provider:          e.def.Provider,
+		Product:           e.def.Product,
+		Source:            e.def.Source,
+		LastAttemptAt:     cloneTime(st.LastAttemptAt),
+		NextAttemptAt:     cloneTime(st.NextAttemptAt),
+		Error:             cloneErr(st.Error),
+		Quotas:            []model.Quota{},
+		Metrics:           []model.Metric{},
 	}
 	if e.def.DisplayName != "" {
 		name := e.def.DisplayName

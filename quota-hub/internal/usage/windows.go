@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -22,10 +23,13 @@ type QuotaSummary struct {
 }
 
 type QuotaWindow struct {
-	V               int        `json:"v"`
-	Subscription    string     `json:"subscription"`
-	Quota           string     `json:"quota"`
-	Provider        string     `json:"provider"`
+	V            int    `json:"v"`
+	Subscription string `json:"subscription"`
+	Quota        string `json:"quota"`
+	Provider     string `json:"provider"`
+	// Providers lists every OpenCode provider counted in the window; empty means
+	// Provider only (records written before multi-provider subscriptions).
+	Providers       []string   `json:"providers,omitempty"`
 	Model           *string    `json:"model"`
 	Label           *string    `json:"label"`
 	DurationSeconds *int64     `json:"durationSeconds"`
@@ -38,6 +42,7 @@ type WindowReport struct {
 	Subscription string     `json:"subscription"`
 	Quota        string     `json:"quota"`
 	Provider     string     `json:"provider"`
+	Providers    []string   `json:"providers,omitempty"`
 	Model        *string    `json:"model"`
 	Label        *string    `json:"label"`
 	Start        *time.Time `json:"start"`
@@ -129,7 +134,8 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 			s.QuotaWindows[windowKey(window.Subscription, window.Quota)] = window
 		}
 		for _, subscription := range snapshot.Subscriptions {
-			if subscription.OpenCodeProvider == nil || *subscription.OpenCodeProvider == "" {
+			bound := subscriptionProviders(subscription)
+			if len(bound) == 0 {
 				continue
 			}
 			for _, quota := range subscription.Quotas {
@@ -140,14 +146,17 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 				previous, exists := s.QuotaWindows[key]
 				reset := quota.Window.ResetAt.UTC()
 				// A changed provider binding re-records the same window, so its calls count from now on.
-				if exists && previous.Provider == *subscription.OpenCodeProvider &&
+				if exists && slices.Equal(previous.providers(), bound) &&
 					reset.Sub(previous.Reset) >= -120*time.Second && reset.Sub(previous.Reset) <= 120*time.Second {
 					continue
 				}
 				window := QuotaWindow{
 					V: 1, Subscription: subscription.ID, Quota: quota.ID,
-					Provider: *subscription.OpenCodeProvider, Model: quota.Model, Label: quota.Label,
+					Provider: bound[0], Model: quota.Model, Label: quota.Label,
 					DurationSeconds: quota.Window.DurationSeconds, Reset: reset, SeenAt: now,
+				}
+				if len(bound) > 1 {
+					window.Providers = bound
 				}
 				if window.DurationSeconds != nil {
 					start := reset.Add(-time.Duration(*window.DurationSeconds) * time.Second)
@@ -173,8 +182,8 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 	providers := make(map[string]bool)
 	percent := make(map[string]*float64)
 	for _, subscription := range s.QuotaSnapshot.Subscriptions {
-		if subscription.OpenCodeProvider != nil && *subscription.OpenCodeProvider != "" {
-			providers[*subscription.OpenCodeProvider] = true
+		for _, provider := range subscriptionProviders(subscription) {
+			providers[provider] = true
 		}
 		for _, quota := range subscription.Quotas {
 			percent[windowKey(subscription.ID, quota.ID)] = quota.UsedPercent
@@ -211,7 +220,7 @@ func reportQuotaWindow(dir string, window QuotaWindow) (WindowReport, error) {
 		start = *window.Start
 	}
 	report, err := readReport(dir, start, window.Reset, func(record Record) bool {
-		if record.Provider == nil || *record.Provider != window.Provider {
+		if record.Provider == nil || !slices.Contains(window.providers(), *record.Provider) {
 			return false
 		}
 		if window.Model == nil {
@@ -221,10 +230,32 @@ func reportQuotaWindow(dir string, window QuotaWindow) (WindowReport, error) {
 		return record.Model != nil && strings.Contains("-"+strings.ToLower(*record.Model)+"-", "-"+slug+"-")
 	})
 	return WindowReport{
-		Subscription: window.Subscription, Quota: window.Quota, Provider: window.Provider,
+		Subscription: window.Subscription, Quota: window.Quota, Provider: window.Provider, Providers: window.Providers,
 		Model: window.Model, Label: window.Label, Start: window.Start, Reset: window.Reset,
 		Partial: window.Start == nil, Totals: report.Totals,
 	}, err
+}
+
+func (w QuotaWindow) providers() []string {
+	if len(w.Providers) > 0 {
+		return w.Providers
+	}
+	return []string{w.Provider}
+}
+
+// subscriptionProviders lists the providers of a snapshot subscription: the
+// opencode_providers list, else the single opencode_provider.
+func subscriptionProviders(sub quotaModel.Subscription) []string {
+	var out []string
+	for _, p := range sub.OpenCodeProviders {
+		if p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 && sub.OpenCodeProvider != nil && *sub.OpenCodeProvider != "" {
+		out = []string{*sub.OpenCodeProvider}
+	}
+	return out
 }
 
 // ReadWindows reports every recorded instance without opening an importer.

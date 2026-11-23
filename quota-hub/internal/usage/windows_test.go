@@ -189,3 +189,57 @@ func TestQuotaFailuresAndDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestQuotaWindowSumsAnthropicAndClaudeAgent(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(`{"anthropic":{"models":{
+		"claude-opus-5-5":{"canonical_model_id":"anthropic/claude-opus-5-5","release_date":"2026-09-22","cost":{"input":4}}
+	}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reset := clock.Add(time.Hour)
+	duration := int64(18000)
+	snapshot := quotaModel.Snapshot{SchemaVersion: 1, Subscriptions: []quotaModel.Subscription{{
+		ID: "claude", OpenCodeProvider: pointer("anthropic"), OpenCodeProviders: []string{"anthropic", "claude-agent"},
+		Quotas: []quotaModel.Quota{{ID: "five_hour", Window: quotaModel.Window{ResetAt: &reset, DurationSeconds: &duration}}},
+	}}}
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		json.NewEncoder(w).Encode(snapshot)
+	}))
+	defer server.Close()
+	i.QuotasURL = server.URL
+	add := func(id, provider, name string) string {
+		e := Event{V: 1, ID: id, Time: clock.Add(-time.Hour).UnixMilli(), Source: "step", Status: "ended", Session: "s",
+			Provider: &provider, Model: &name, Tokens: Tokens{Input: 1e6}}
+		b, _ := json.Marshal(e)
+		return string(b) + "\n"
+	}
+	write(t, filepath.Join(i.Dir, "events", "a.jsonl"),
+		add("api", "anthropic", "claude-opus-5-5")+add("agent", "claude-agent", "opus")+add("other", "openai", "gpt"))
+	first := cycle(t, i)
+	if len(first.Current) != 1 {
+		t.Fatalf("%+v", first.Current)
+	}
+	w := first.Current[0]
+	// One total for the account; each call priced by its own provider's rules.
+	if w.Calls != 2 || w.USD != 8 || w.Unpriced != 0 || len(w.Providers) != 2 || first.Unmatched.Calls != 1 {
+		t.Fatalf("%+v unmatched %+v", w, first.Unmatched)
+	}
+	// Narrowing the binding re-records the window with one provider.
+	mu.Lock()
+	snapshot.Subscriptions[0].OpenCodeProviders = []string{"claude-agent"}
+	snapshot.Subscriptions[0].OpenCodeProvider = pointer("claude-agent")
+	mu.Unlock()
+	next := cycle(t, i)
+	if next.Current[0].Calls != 1 || next.Current[0].Provider != "claude-agent" || len(next.Current[0].Providers) != 0 {
+		t.Fatalf("%+v", next.Current[0])
+	}
+	if instances, _ := readQuotaWindows(i.Dir); len(instances) != 2 {
+		t.Fatal(len(instances))
+	}
+}

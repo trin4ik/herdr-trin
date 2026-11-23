@@ -47,6 +47,10 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
 - `subscription.opencode_provider` — optional/null id провайдера OpenCode,
   вызовы которого расходуют подписку (`openai`, `anthropic`, integration_id ключа,
   `opencode`). Это не поле `provider` с названием подписки; UI может его игнорировать.
+- `subscription.opencode_providers` — optional список всех провайдеров OpenCode,
+  вызовы которых расходуют подписку; `opencode_provider` — его первый элемент.
+  Подписка Claude по умолчанию: `["anthropic", "claude-agent"]`. Каждый вызов
+  оценивается по правилам своего провайдера, `quota.usage` — общая сумма по окну.
 - `quota.model` — optional id модели провайдера (иначе DisplayName) для Claude
   `weekly_scoped`; ограничивает окно одной моделью. Не заменяет `scope`;
   UI может игнорировать поле. Старые файлы без обоих полей читаются как прежде.

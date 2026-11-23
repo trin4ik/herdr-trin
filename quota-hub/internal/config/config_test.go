@@ -424,7 +424,16 @@ func TestClaudePassiveProfileAndUsageProvider(t *testing.T) {
 			c.Subscriptions[3].ClaudeFallback = &ClaudeFallback{Enabled: true, CredentialFile: "/c.json"}
 		},
 		"unsafe provider": func(c *Config) { c.Subscriptions[3].OpenCodeProvider = "Claude Agent" },
-		"other provider":  func(c *Config) { c.Subscriptions[0].OpenCodeProvider = "claude-agent" },
+		"both fields":     func(c *Config) { c.Subscriptions[3].OpenCodeProviders = []string{"anthropic"} },
+		"duplicate list": func(c *Config) {
+			c.Subscriptions[3].OpenCodeProvider = ""
+			c.Subscriptions[3].OpenCodeProviders = []string{"anthropic", "anthropic"}
+		},
+		"empty list": func(c *Config) {
+			c.Subscriptions[3].OpenCodeProvider = ""
+			c.Subscriptions[3].OpenCodeProviders = []string{}
+		},
+		"other provider": func(c *Config) { c.Subscriptions[0].OpenCodeProvider = "claude-agent" },
 	} {
 		base := valid(t)
 		p := *c.Subscriptions[3].ClaudeProfile
@@ -434,5 +443,21 @@ func TestClaudePassiveProfileAndUsageProvider(t *testing.T) {
 		if _, err := base.Specs(); err == nil {
 			t.Fatalf("%s accepted", name)
 		}
+	}
+}
+
+func TestClaudeDefaultsToAnthropicAndClaudeAgent(t *testing.T) {
+	c := valid(t)
+	specs, err := c.Specs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := specs[3].OpenCodeProviders; len(got) != 2 || got[0] != "anthropic" || got[1] != "claude-agent" ||
+		specs[3].OpenCodeProvider == nil || *specs[3].OpenCodeProvider != "anthropic" {
+		t.Fatalf("%v", got)
+	}
+	c.Subscriptions[3].OpenCodeProviders = []string{"claude-agent", "anthropic"}
+	if specs, err = c.Specs(); err != nil || *specs[3].OpenCodeProvider != "claude-agent" || len(specs[3].OpenCodeProviders) != 2 {
+		t.Fatalf("%v %v", specs[3].OpenCodeProviders, err)
 	}
 }

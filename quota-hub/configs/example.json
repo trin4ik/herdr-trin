@@ -16,7 +16,7 @@
     {
       "id": "claude-agent-passive", "provider": "claude", "enabled": false,
       "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
-      "interval": "30s", "opencode_provider": "claude-agent",
+      "interval": "30s", "opencode_providers": ["anthropic", "claude-agent"],
       "claude_profile": {
         "credential_file": "/absolute/path/to/.claude/.credentials.json",
         "account_file": "/absolute/path/to/.claude.json",

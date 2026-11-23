@@ -16,7 +16,10 @@ type Snapshot struct {
 
 type Subscription struct {
 	OpenCodeProvider *string `json:"opencode_provider"`
-	DisplayName      *string `json:"display_name,omitempty"`
+	// OpenCodeProviders lists every OpenCode provider whose calls consume the
+	// subscription; opencode_provider is its first entry.
+	OpenCodeProviders []string `json:"opencode_providers,omitempty"`
+	DisplayName       *string  `json:"display_name,omitempty"`
 
 	ID            string     `json:"id"`
 	Provider      string     `json:"provider"`
@@ -110,6 +113,7 @@ func (e *ErrorInfo) Error() string { return e.Code }
 // Definition is non-secret public identity plus freshness policy.
 type Definition struct {
 	OpenCodeProvider     *string
+	OpenCodeProviders    []string
 	DisplayName          string
 	VerifiedPlan         string // Optional verified, operator-provided plan for a dedicated container.
 	VerifiedAccountEmail string // Optional operator-verified email; never emitted without publication consent.

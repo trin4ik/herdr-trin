@@ -71,10 +71,12 @@ type Subscription struct {
 	// ClaudeProfile reads the account e-mail and plan of a passive-only Claude
 	// subscription from local Claude Code files. It never performs network I/O.
 	ClaudeProfile *ClaudeProfile `json:"claude_profile,omitempty"`
-	// OpenCodeProvider overrides the OpenCode provider whose calls consume a
-	// passive Claude subscription (for example claude-agent).
-	OpenCodeProvider string `json:"opencode_provider,omitempty"`
-	Retry            Retry  `json:"retry,omitempty"`
+	// OpenCodeProvider/OpenCodeProviders override the OpenCode providers whose
+	// calls consume an observed Claude subscription (default: anthropic and
+	// claude-agent).
+	OpenCodeProvider  string   `json:"opencode_provider,omitempty"`
+	OpenCodeProviders []string `json:"opencode_providers,omitempty"`
+	Retry             Retry    `json:"retry,omitempty"`
 }
 
 type ClaudeFallback struct {
@@ -218,8 +220,8 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		OpenCodeURL: strings.TrimRight(c.OpenCode.URL, "/"), OpenCodeBearerEnv: c.OpenCode.TokenEnv,
 		OpenCodeServiceFile: c.OpenCode.ServiceFile}
 	interval, stale := 5*time.Minute, 30*time.Minute
-	if (entry.Provider != "claude" || entry.Source == collectors.SourceClaudeProxy) && (entry.ClaudeProfile != nil || entry.OpenCodeProvider != "") {
-		return s, errors.New("claude_profile and opencode_provider are only valid for observed claude subscriptions")
+	if (entry.Provider != "claude" || entry.Source == collectors.SourceClaudeProxy) && (entry.ClaudeProfile != nil || entry.OpenCodeProvider != "" || entry.OpenCodeProviders != nil) {
+		return s, errors.New("claude_profile and opencode_provider(s) are only valid for observed claude subscriptions")
 	}
 	if entry.Provider != "claude" && entry.Provider != "opencode" && (entry.ClaudeFallback != nil || entry.ObserveInterval != "") {
 		return s, errors.New("Claude fallback and observe_interval are only valid for claude and opencode")
@@ -335,11 +337,25 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 			s.CredentialFile, s.ClaudeAccountFile, s.ClaudeExpectedAccountSHA256 = p.CredentialFile, p.AccountFile, p.ExpectedAccountSHA256
 			s.ClaudeProfile = true
 		}
+		if entry.OpenCodeProvider != "" && entry.OpenCodeProviders != nil {
+			return s, errors.New("use either opencode_provider or opencode_providers")
+		}
+		providers := entry.OpenCodeProviders
 		if entry.OpenCodeProvider != "" {
-			if !identifier.MatchString(entry.OpenCodeProvider) {
-				return s, errors.New("opencode_provider must be a safe OpenCode provider ID")
+			providers = []string{entry.OpenCodeProvider}
+		}
+		if providers != nil {
+			if len(providers) == 0 || len(providers) > 8 {
+				return s, errors.New("opencode_providers must list 1 to 8 provider IDs")
 			}
-			s.UsageProviderOverride = entry.OpenCodeProvider
+			seen := map[string]bool{}
+			for _, p := range providers {
+				if !identifier.MatchString(p) || seen[p] {
+					return s, errors.New("opencode_providers must be unique safe OpenCode provider IDs")
+				}
+				seen[p] = true
+			}
+			s.UsageProvidersOverride = append([]string(nil), providers...)
 		}
 	case "opencode":
 		// Paid OpenCode Go. The credential is the Console
@@ -412,6 +428,7 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		return s, errors.New("scope must be a safe identifier, not an account token")
 	}
 	s.OpenCodeProvider = s.UsageProvider()
+	s.OpenCodeProviders = s.UsageProviders()
 	return s, nil
 }
 

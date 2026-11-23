@@ -55,3 +55,31 @@ func TestClaudeScopedModelField(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageProvidersKeepAnthropicAndClaudeAgentApart(t *testing.T) {
+	claude := Spec{Definition: model.Definition{Provider: ProviderClaude, Source: SourceOpenCodeObserved}}
+	if got := claude.UsageProviders(); len(got) != 2 || got[0] != "anthropic" || got[1] != "claude-agent" {
+		t.Fatalf("%v", got)
+	}
+	if got := claude.UsageProvider(); got == nil || *got != "anthropic" {
+		t.Fatalf("primary %v", got)
+	}
+	proxy := Spec{Definition: model.Definition{Provider: ProviderClaude, Source: SourceClaudeProxy}, IntegrationID: "claude-proxy-x"}
+	if got := proxy.UsageProviders(); len(got) != 1 || got[0] != "claude-proxy-x" {
+		t.Fatalf("proxy %v", got)
+	}
+	only := claude
+	only.UsageProvidersOverride = []string{"claude-agent"}
+	if got := only.UsageProviders(); len(got) != 1 || got[0] != "claude-agent" || *only.UsageProvider() != "claude-agent" {
+		t.Fatalf("override %v", got)
+	}
+	codex := Spec{Definition: model.Definition{Provider: ProviderCodex, Source: SourceNativeCodexOAuth}}
+	if got := codex.UsageProviders(); len(got) != 1 || got[0] != "openai" {
+		t.Fatalf("codex %v", got)
+	}
+	// The returned slice is a copy.
+	claude.UsageProviders()[0] = "changed"
+	if ClaudeUsageProviders[0] != "anthropic" {
+		t.Fatal("shared default mutated")
+	}
+}

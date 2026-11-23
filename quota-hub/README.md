@@ -96,13 +96,19 @@ Claude account metadata/email требует отдельного account_file (
 файл с project history и не включает account pin. Не путайте unknown profile с
 ошибкой квоты. Подключение профиля — явное локальное решение, не auto-discovery.
 
-Пассивная подписка без запросов к Anthropic (только ответы Claude Code через
-`opencode-usage-bridge`): без `claude_fallback`, с `"opencode_provider": "claude-agent"`,
-чтобы вызовы этого провайдера считались в окнах, и с блоком `claude_profile`
+Подписка Claude по умолчанию считает вызовы обоих провайдеров OpenCode, которые
+работают с ней напрямую: `anthropic` (API, цена по точному ID модели) и
+`claude-agent` (Claude Code harness, цена по псевдониму модели). В окне — общая
+сумма по аккаунту. `opencode_providers` (или одна строка `opencode_provider`)
+сужает или меняет этот список. Лимиты обоих провайдеров пишутся в один файл
+наблюдения: аккаунт один, quota-hub берёт самое свежее значение.
+
+Пассивная подписка без запросов к Anthropic (только ответы Claude): без
+`claude_fallback` и с блоком `claude_profile`
 (`credential_file`, `account_file`, `expected_account_sha256`). Профиль (e-mail и
 `subscriptionType`) читается только из локальных файлов Claude Code; истёкший
 access token скрывает профиль до обновления самим Claude Code, квоты остаются.
-Смена `opencode_provider` перезаписывает текущие окна в `windows.jsonl`, вызовы
+Смена списка провайдеров перезаписывает текущие окна в `windows.jsonl`, вызовы
 нового провайдера считаются с этого момента. Модели-псевдонимы `claude-agent`
 (`opus`, `sonnet`, `haiku`, `fable`) оцениваются по самой новой модели семейства
 у `anthropic` в models.dev; это оценка, а не точный ID модели вызова.
