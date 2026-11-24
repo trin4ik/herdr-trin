@@ -106,78 +106,84 @@
           "window_drag": true
         },
         {
-          "id": "work-body",
-          "type": "row",
+          "id": "session-body",
+          "type": "stack",
+          "active": "work-body",
           "children": [
             {
-              "id": "project-workspace",
-              "type": "stack",
-              "size": { "weight": 1 },
-              "active": "main",
+              "id": "work-body",
+              "type": "row",
               "children": [
                 {
-                  "id": "main",
-                  "type": "block",
-                  "content": {
-                    "tab": "active",
-                    "pane": {
-                      "header": {
-                        "content": { "mod": "pane" },
-                        "reveal": "always",
-                        "height": 0,
-                        "position": "top"
-                      },
-                      "background": "background",
-                      "border": { "width": 1, "color": "border" },
-                      "focus": { "width": 1, "color": "accent" },
-                      "radius": 0,
-                      "lone": false
-                    }
-                  }
-                },
-                {
-                  "id": "project-empty",
-                  "type": "block",
-                  "content": { "mod": "trin-projects", "props": { "surface": "empty" } }
-                }
-              ]
-            },
-            {
-              "id": "panel",
-              "type": "column",
-              "children": [
-                {
-                  "id": "panel-body",
+                  "id": "project-workspace",
                   "type": "stack",
+                  "size": { "weight": 1 },
+                  "active": "main",
                   "children": [
                     {
-                      "id": "files",
+                      "id": "main",
                       "type": "block",
                       "content": {
-                        "mod": "files"
+                        "tab": "active",
+                        "pane": {
+                          "header": {
+                            "content": { "mod": "pane" },
+                            "reveal": "always",
+                            "height": 0,
+                            "position": "top"
+                          },
+                          "background": "background",
+                          "border": { "width": 1, "color": "border" },
+                          "focus": { "width": 1, "color": "accent" },
+                          "radius": 0,
+                          "lone": false
+                        }
                       }
                     },
                     {
-                      "id": "changes",
+                      "id": "project-empty",
                       "type": "block",
-                      "content": {
-                        "mod": "changes"
-                      }
+                      "content": { "mod": "trin-projects", "props": { "surface": "empty" } }
+                    }
+                  ]
+                },
+                {
+                  "id": "panel",
+                  "type": "column",
+                  "children": [
+                    {
+                      "id": "panel-body",
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "files",
+                          "type": "block",
+                          "content": { "mod": "files" }
+                        },
+                        {
+                          "id": "changes",
+                          "type": "block",
+                          "content": { "mod": "changes" }
+                        }
+                      ],
+                      "active": "files"
                     }
                   ],
-                  "active": "files"
+                  "size": { "px": 368 },
+                  "min": 280,
+                  "max": 900,
+                  "hidden": true
                 }
               ],
-              "size": {
-                "px": 368
-              },
-              "min": 280,
-              "max": 900,
-              "hidden": true
+              "padding": 0,
+              "gap": 8
+            },
+            {
+              "id": "hidden-tabs-empty",
+              "type": "block",
+              "content": { "mod": "trin-tabs", "props": { "surface": "hidden-empty" } }
             }
-          ],
-          "padding": 0,
-          "gap": 8
+          ]
         },
         {
           "id": "status",

@@ -28,9 +28,9 @@ const mouse = (y, local = 4, height = 52) => ({
   position: { x: 12, y }, local_position: { x: 12, y: local }, bounds: { width: 200, height },
 });
 const cx = { notify() {}, stop_propagation() {} };
-const click = row => {
-  row.handlers.on_mouse_down(mouse(10), cx);
-  row.handlers.on_mouse_up(mouse(10), cx);
+const click = (row, context = cx) => {
+  row.handlers.on_mouse_down(mouse(10), context);
+  row.handlers.on_mouse_up(mouse(10), context);
 };
 
 function fixture(storage = {}) {
@@ -156,9 +156,11 @@ test("only main Herdr sessions appear, even when child terminals have panes or p
   assert.deepEqual(badges, ["2"]);
 });
 
-test("background sessions are visible and read-only, with no terminal navigation entries", () => {
+test("background rows can be opened, without fabricated terminal navigation entries", () => {
   const { panel, commands, agents, context, advance } = fixture();
-  panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_job", background: true,
+  const opened = [];
+  panel.openBackground = a => opened.push(a.sessionID);
+  panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_job", sessionID: "ses_job", background: true,
     title: "Background job", folder: "/fixture", program: { name: "OpenCode" }, status: "working" }];
   panel.activity.session = a => a === agents[1] ? { excluded: true } : null;
   panel.render();
@@ -174,9 +176,48 @@ test("background sessions are visible and read-only, with no terminal navigation
     if (width === 44) assert.match(row.attrs.tooltip[0], /Background job.*\n.*\n.*\nФоновая сессия/);
     else assert.match(text(row), /Background job.*В фоне/);
   }
+  assert.deepEqual(opened, ["ses_job", "ses_job"]);
   assert.deepEqual(commands, []);
 });
 
+test("clicking a background session resumes its existing ID on its owning machine, with duplicate clicks locked", async () => {
+  const { panel, commands, context, spaces } = fixture();
+  const calls = [], pending = [];
+  spaces.push({ id: "r", name: "Remote", folder: "/fixture", machine: "server", tabs: [] });
+  context.machines = () => [{ name: "server", layout: "ready" }];
+  context.exec = async (_file, [, command, args]) => {
+    calls.push([command, JSON.parse(args)]);
+    return { code: 0, stdout: '{"space":"r","tab":"resumed"}' };
+  };
+  const agent = { address: "opencode-session:server/ses_job", sessionID: "ses_job", folder: "/fixture", machine: "server" };
+  const asyncCtx = { ...cx, spawn: fn => pending.push(fn(asyncCtx)) };
+  panel.openBackground(agent, asyncCtx);
+  panel.openBackground(agent, asyncCtx);
+  await Promise.all(pending);
+  assert.deepEqual(calls, [["tab.new", { space: "r", folder: "/fixture", argv: ["opencode", "--session", "ses_job"], focus: false }]]);
+  assert.equal(commands[0].args.id, "resumed");
+});
+
+test("working hidden tabs live below the folded section and return to the main list on a result", () => {
+  const { panel, commands, agents, spaces } = fixture();
+  spaces[0].tabs.push({ id: "hidden", name: "Hidden job", named: true, settled: true });
+  const job = agents[0];
+  job.tab = "hidden";
+  let root = panel.render();
+  assert.equal(byID(root, "ag-t0"), undefined);
+  const toggle = byID(root, "hidden-sessions-toggle");
+  assert.ok(toggle);
+  toggle.handlers.on_click({}, cx);
+  root = panel.render();
+  const hidden = byID(byID(root, "hidden-sessions"), "ag-t0");
+  assert.ok(hidden);
+  hidden.handlers.on_click({}, cx);
+  assert.equal(commands.at(-1).args.pane, "p0");
+  job.status = "done";
+  root = panel.render();
+  assert.ok(byID(root, "ag-t0"));
+  assert.equal(byID(root, "hidden-sessions"), undefined);
+});
 const sessionRows = panel => Array.from(byID(panel.render(), "ag-list").childNodes, row => row.attrs.id[0].slice(3));
 
 test("sessions support drop before and after, persist order and preserve click-to-focus in both widths", () => {

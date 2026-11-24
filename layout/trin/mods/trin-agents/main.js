@@ -2,7 +2,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
+import { agents, terminals, spaces, machines, exec, notify, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
 import { ActivityMonitor, isOpenCode, sessionAddress, terminalSessionID } from "./activity.js";
 import { BackgroundAdmission } from "./background.js";
 import { WorkingClock } from "./metrics.js";
@@ -45,6 +45,8 @@ export default class Agents extends View {
   init(_props, cx) {
     this.order = parseOrder(localStorage.getItem(ORDER_KEY) ?? localStorage.getItem("pins"));
     this.drag = null;
+    this.hiddenOpen = localStorage.getItem("sessions.hidden-open") === "true";
+    this.opening = new Map();
     this.activity = new ActivityMonitor(shared(TITLES_KEY) ?? {});
     this.clock = new WorkingClock();
     this.live = !checking();
@@ -64,9 +66,51 @@ export default class Agents extends View {
 
   close() {
     this.drag = null;
+    this.closed = true;
     this.backgroundTimer?.cancel();
     this.activity?.close();
     if (this.badge !== undefined) setBadge(null);
+  }
+
+  openBackground(agent, cx) {
+    this.opening ??= new Map();
+    if (this.opening.has(agent.address)) return;
+    const { sessionID, folder, machine } = agent;
+    if (!/^ses[A-Za-z0-9_-]+$/.test(sessionID ?? "") || typeof folder !== "string"
+      || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(folder) || /[\x00-\x1f]/.test(folder)) {
+      notify({ title: "Сессии", body: "Не удалось определить каталог сессии.", level: "error" });
+      return;
+    }
+    if (!machines().some(m => (m.name ?? null) === (machine ?? null) && m.layout === "ready")) {
+      notify({ title: "Сессии", body: "Машина с этой сессией сейчас недоступна.", level: "error" });
+      return;
+    }
+    const scoped = spaces().filter(s => (s.machine ?? null) === (machine ?? null));
+    const registry = shared("trin.projects.v1");
+    const folderOf = s => registry?.projects?.find(p => p.space === s.id)?.folder ?? s.folder;
+    const space = scoped.find(s => folderOf(s) === folder) ?? scoped.find(s => s.active) ?? scoped[0];
+    const target = { tab: null };
+    this.opening.set(agent.address, target);
+    cx.spawn(async cx => {
+      try {
+        const argv = ["opencode", "--session", sessionID];
+        const args = space ? { space: space.id, folder, argv, focus: false }
+          : { machine: machine ?? "", folder, argv, focus: false };
+        const result = await exec("herdr-app", ["do", space ? "tab.new" : "space.new", JSON.stringify(args)]);
+        if (result.code !== 0) throw Error("Не удалось открыть сессию OpenCode.");
+        const reply = JSON.parse(result.stdout);
+        if (!reply.tab || reply.error) throw Error("Herdr не подтвердил открытие вкладки.");
+        target.tab = reply.tab;
+        if (this.closed) return;
+        const state = shared("trin.projects.v1"), project = state?.projects?.find(p => p.space === (reply.space ?? space?.id));
+        if (project && state.selected !== project.id) setShared("trin.projects.v1", { ...state, selected: project.id });
+        run("tab.select", { id: reply.tab });
+        cx.notify();
+      } catch {
+        this.opening.delete(agent.address);
+        if (!this.closed) notify({ title: "Сессии", body: "Не удалось открыть сессию OpenCode.", level: "error" });
+      }
+    });
   }
 
   admittedBackground(cx, claimed, unresolvedMachines, now) {
@@ -117,7 +161,7 @@ export default class Agents extends View {
     const sorting = this.rows.length > 1;
     return row.relative().accessibility_label(title)
       .when(sorting, el => el.cursor_grab())
-      .when(!sorting && !agent.background, el => el.cursor_pointer())
+      .when(!sorting, el => el.cursor_pointer())
       .when(this.drag?.active && this.drag.id === id, el => el.opacity(0.5).cursor_grabbing())
       .when(this.drag?.over === id, el => el.child(div().id(`session-drop-${agent.address}`).absolute()
         .left(collapsed ? 4 : 8).right(collapsed ? 4 : 8).h(2).rounded(1).bg(t.accent)
@@ -138,7 +182,7 @@ export default class Agents extends View {
         this.dragTarget(event, id, cx);
         const { id: source, active, over, after } = this.drag;
         this.cancelDrag(cx);
-        if (!active && source === id && !agent.background) select(agent);
+        if (!active && source === id) select(agent, cx);
         else if (active && over && event.local_position && event.bounds) {
           const order = moveSession(this.rows, this.renderOrder, source, over, after);
           if (order !== this.renderOrder) {
@@ -158,6 +202,7 @@ export default class Agents extends View {
     const all = new Map(terminals().map(terminal => [terminal.address, terminal]));
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
+    const tabs = new Map(sp.flatMap(s => s.tabs).map(tab => [tab.id, tab]));
     const aliases = new Map(), attached = new Map(), sessionIDs = new Map(), excluded = new Set();
     const owners = new Map();
     const unresolvedMachines = new Set();
@@ -188,10 +233,13 @@ export default class Agents extends View {
         if (title) titles[agent.address] = { sessionID, title, caption: agent.title ?? "",
           pid: terminal?.foreground?.pid ?? terminal?.pid ?? null, created: terminal?.created_ms ?? null };
       }
-      const previous = attached.get(id)?.agent;
-      if (!previous || (agent.focused && !previous.focused) || (agent.focused === previous.focused
-        && (ATTENTION[agent.status] ?? 0) > (ATTENTION[previous.status] ?? 0))) {
-        attached.set(id, { id, agent });
+      const attention = agent.status === "done" || agent.status === "blocked";
+      const hidden = Boolean(tabs.get(agent.tab)?.settled) && !attention;
+      const previous = attached.get(id);
+      if (!previous || (previous.hidden && !hidden) || (previous.hidden === hidden
+        && ((agent.focused && !previous.agent.focused) || (agent.focused === previous.agent.focused
+          && (ATTENTION[agent.status] ?? 0) > (ATTENTION[previous.agent.status] ?? 0))))) {
+        attached.set(id, { id, agent, hidden });
       }
     }
     const titleSignature = JSON.stringify(titles);
@@ -212,10 +260,20 @@ export default class Agents extends View {
       const p = projects.find(p => p.space === a.space);
       return p ? { ...s, name: p.name, color: p.color } : s;
     };
-    const focusAgent = a => {
+    const focusAgent = (a, cx) => {
+      if (a.background) {
+        const existing = this.opening?.get(a.address)?.tab;
+        if (existing) run("tab.select", { id: existing });
+        else this.openBackground(a, cx);
+        return;
+      }
       const state = shared("trin.projects.v1"), p = state?.projects?.find(p => p.space === a.space);
       if (p && state.selected !== p.id) setShared("trin.projects.v1", { ...state, selected: p.id });
-      run("pane.focus", { pane: a.pane });
+      if (a.pane) run("pane.focus", { pane: a.pane });
+      else run("tab.select", { id: a.tab });
+      if (find(layout(), "session-body")?.active === "hidden-tabs-empty") {
+        setShared("trin.sessions.reveal", { id: a.tab, at: Date.now() });
+      }
     };
     // Track work time even when the compact rail doesn't show it.
     const now = Date.now();
@@ -226,15 +284,30 @@ export default class Agents extends View {
     for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now)) {
       attached.set(agent.address, { id: agent.address, agent });
     }
-    const rows = [...attached.values()];
+    const rows = [...attached.values()].filter(item => !item.hidden);
+    const hidden = [...attached.values()].filter(item => item.hidden);
+    // A launcher may still be coming up, before it reports enough for agents().
+    const represented = new Set([...attached.values()].map(item => item.agent.tab));
+    for (const space of sp) for (const tab of space.tabs) {
+      if (tab.settled && tab.status !== "blocked" && tab.status !== "done" && !represented.has(tab.id)) {
+        hidden.push({ agent: { address: `hidden-tab:${tab.id}`, space: space.id, tab: tab.id,
+          title: tab.name, status: tab.status ?? "idle" } });
+      }
+    }
+    for (const [id, opening] of this.opening ?? []) {
+      if (!opening.tab) continue;
+      const present = tabs.has(opening.tab);
+      if ((opening.present && !present) || !rows.some(item => item.id === id && item.agent.background)) {
+        this.opening.delete(id);
+      } else if (present) opening.present = true;
+    }
     this.renderOrder = [...new Set(this.order.map(id => aliases.get(id) ?? id))];
     this.rows = orderedSessions(rows, this.renderOrder);
     if (this.drag && (!rows.some(row => row.id === this.drag.id)
       || (this.drag.over && !rows.some(row => row.id === this.drag.over)))) this.drag = null;
     if (this.live !== false) setAgentOrder(this.rows.filter(row => !row.agent.background).map(row => row.agent.address));
 
-    const tabs = sp.flatMap(s => s.tabs);
-    const label = (a) => sessionName(tabs.find(tab => tab.id === a.tab), a, titles[a.address]?.title);
+    const label = (a) => sessionName(tabs.get(a.tab), a, titles[a.address]?.title);
 
     const row = (a) => {
       const pic = spaceAvatar(spaceOf(a), t);
@@ -310,8 +383,24 @@ export default class Agents extends View {
         .on_mouse_down_out((_event, cx) => this.cancelDrag(cx))
         .on_hover((over, cx) => { if (!over) this.cancelDrag(cx); })
         .when(this.rows.length === 0 && !collapsed, el =>
-          el.child(div().px(4).text_size(12).text_color(t.muted).child("Нет сессий со статусом.")))
-        .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent))))
+          el.child(div().px(4).text_size(12).text_color(t.muted).child(hidden.length ? "Нет открытых сессий." : "Нет сессий со статусом.")))
+        .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent)))
+        .when(hidden.length > 0, el => el.child(v_flex().id("hidden-sessions").flex_none()
+          .child(h_flex().id("hidden-sessions-toggle").h(30).px(collapsed ? 2 : 6).gap(4).items_center()
+            .when(collapsed, h => h.justify_center()).border_t(1).border_color(t.border)
+            .text_color(t.muted).text_size(11).cursor_pointer().hover(h => h.bg(t.hover))
+            .tooltip(`Скрытые сессии: ${hidden.length}`).accessibility_label(`Скрытые сессии: ${hidden.length}`)
+            .on_click((_e, cx) => {
+              this.hiddenOpen = !this.hiddenOpen;
+              localStorage.setItem("sessions.hidden-open", String(this.hiddenOpen));
+              cx.notify();
+            })
+            .child(svg(`mods/workspace-chrome/chevron-${this.hiddenOpen ? "down" : "right"}.svg`).size(11).flex_none())
+            .when(!collapsed, h => h.child(div().flex_1().truncate().child("Скрытые")))
+            .child(div().child(String(hidden.length))))
+          .when(Boolean(this.hiddenOpen), el => el.children(hidden.map(({ agent }) => row(agent)
+            .cursor_pointer().accessibility_label(`Вернуть: ${label(agent)}`)
+            .on_click((_e, cx) => focusAgent(agent, cx))))))))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

@@ -18,10 +18,13 @@ test("layout node IDs are unique and preserve the commands' structural targets",
   const list = nodes(layout);
   const ids = list.map(n => n.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const [id, type] of Object.entries({ sidebar: "column", "sidebar-lists": "column", "work-body": "row", panel: "column", "panel-body": "stack" })) {
+  for (const [id, type] of Object.entries({ sidebar: "column", "sidebar-lists": "column", "session-body": "stack", "work-body": "row", panel: "column", "panel-body": "stack" })) {
     assert.equal(list.find(n => n.id === id)?.type, type, id);
   }
   assert.deepEqual(list.find(n => n.id === "panel-body").children.map(n => n.id), ["files", "changes"]);
+  const sessionBody = list.find(n => n.id === "session-body");
+  assert.equal(sessionBody.active, "work-body");
+  assert.deepEqual(sessionBody.children.map(n => n.id), ["work-body", "hidden-tabs-empty"]);
 });
 
 test("layout uses implemented custom mods and explicitly known built-ins", () => {

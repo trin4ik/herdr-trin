@@ -35,7 +35,7 @@ function find(node, id) {
 }
 
 function fixture(mod, initial, platform = "macos") {
-  let list = initial, tabPanes = [], live = [];
+  let list = initial, tabPanes = [], live = [], structure = {};
   const sharedState = {};
   const commands = [];
   const source = fs.readFileSync(new URL(`../mods/${mod}/main.js`, import.meta.url), "utf8")
@@ -44,7 +44,7 @@ function fixture(mod, initial, platform = "macos") {
   const context = {
     View: class {}, div: element, svg: element, image: element, h_flex: element, v_flex: element,
     spaces: () => list, panes: () => tabPanes, terminals: () => live, shared: key => sharedState[key], theme: () => ({}),
-    window: () => ({ platform }), layout: () => ({}), settings: () => ({ zoom: 1 }),
+    window: () => ({ platform }), layout: () => structure, props: () => ({}), settings: () => ({ zoom: 1 }),
     run: (command, args) => commands.push({ command, args }),
     localStorage: { getItem: () => null, setItem() {} },
   };
@@ -52,7 +52,7 @@ function fixture(mod, initial, platform = "macos") {
   const panel = new context.Panel();
   Object.assign(panel, { pressed: null, over: null, panels: {}, spaceAgents: new Map() });
   return { panel, commands, sharedState, setList: next => { list = next; },
-    setTerminals: (next, panes) => { live = next; tabPanes = panes; } };
+    setTerminals: (next, panes) => { live = next; tabPanes = panes; }, setLayout: next => { structure = next; } };
 }
 
 const cx = { stop_propagation() {}, notify() {} };
@@ -86,6 +86,42 @@ test("closing a tab during a drag cancels rather than moving its replacement", (
   f.setList([{ id: "space", active: true, tabs: [tab("b")] }]);
   find(f.panel.render(), "tabs-root").handlers["on_mouse_up:left"]({}, cx);
   assert.equal(f.commands.length, 0);
+});
+
+test("the cross hides live or blocked tabs, closes idle ones, and never closes a stale target", () => {
+  const list = [{ id: "space", active: true, tabs: [{ ...tab("a"), status: "working" }, tab("b")] }];
+  const f = fixture("trin-tabs", list);
+  find(f.panel.render(), "close-a").handlers.on_click({}, cx);
+  find(f.panel.render(), "close-b").handlers.on_click({}, cx);
+  list[0].tabs[0].status = "blocked";
+  f.panel.closeOrHide();
+  f.panel.closeOrHide("missing");
+  assert.deepEqual(f.commands.map(x => [x.command, x.args.id]), [
+    ["tab.settle", "a"], ["tab.close", "b"], ["tab.settle", "a"],
+  ]);
+});
+
+test("hidden tabs do not appear in the strip or drag order, and the last hidden tab does not remain on screen", () => {
+  const list = [{ id: "space", active: true, tabs: [{ ...tab("a"), settled: true }, tab("b"), tab("c")] }];
+  const f = fixture("trin-tabs", list);
+  f.setLayout({ id: "session-body", active: "work-body" });
+  let root = f.panel.render();
+  assert.equal(find(root, "tab-a"), null);
+  find(root, "tab-b").handlers["on_mouse_down:left"]({ click_count: 1, position: { x: 20 }, bounds: { width: 110 } }, cx);
+  f.panel.moveDrag({ position: { x: 170 } }, cx);
+  f.panel.finishDrag(cx);
+  assert.equal(f.commands.at(-1).args.index, 3);
+  list[0].tabs.forEach(t => { t.settled = true; });
+  root = f.panel.render();
+  assert.ok(!find(root, "tab-b") && !find(root, "panel-files"));
+  assert.equal(f.commands.at(-1).args.child, "hidden-tabs-empty");
+  f.setLayout({ id: "session-body", active: "hidden-tabs-empty" });
+  list[0].tabs[0].settled = false;
+  f.panel.render();
+  assert.equal(f.commands.at(-1).args.child, "hidden-tabs-empty", "completion does not auto-view the result");
+  f.sharedState["trin.sessions.reveal"] = { id: "a", at: 1 };
+  f.panel.render();
+  assert.equal(f.commands.at(-1).args.child, "work-body");
 });
 
 test("click selects, double-click renames; leaving the strip cancels without reordering", () => {

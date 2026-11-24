@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings, props, checking, nextCommand } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -25,13 +25,33 @@ function verifiedTitle(terminal, pane, value) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.drag = null;
     this.widths = new Map();
+    this.restoreRequest = shared("trin.sessions.reveal")?.at;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
+    if (props()?.surface || checking()) return;
+    cx.spawn(async () => {
+      while (!this.closed) {
+        const command = await nextCommand();
+        if (this.closed) return;
+        if (command === "close-current") this.closeOrHide();
+        else if (command.startsWith("close--")) {
+          try { this.closeOrHide(decodeURIComponent(command.slice(7))); } catch { /* Invalid encoded ID. */ }
+        }
+      }
+    });
   }
 
-  close() { this.drag = null; }
+  close() { this.drag = null; this.closed = true; }
+
+  closeOrHide(id) {
+    const list = spaces();
+    const tab = id ? list.flatMap(s => s.tabs).find(t => t.id === id)
+      : list.find(s => s.active)?.tabs.find(t => t.active);
+    if (!tab || tab.settled) return;
+    run(tab.status === "working" || tab.status === "blocked" ? "tab.settle" : "tab.close", { id: tab.id });
+  }
 
   cancelDrag(cx) {
     if (!this.drag) return;
@@ -43,7 +63,7 @@ export default class Tabs extends View {
     cx.stop_propagation();
     if (event.click_count === 2) { this.cancelDrag(cx); run("tab.rename", { id: tab.id }); return; }
     if (!event.bounds || !event.position) return;
-    const ids = space.tabs.map(t => t.id);
+    const ids = space.tabs.filter(t => !t.settled).map(t => t.id);
     const widths = ids.map(id => id === tab.id ? event.bounds.width : this.widths.get(id) ?? 110);
     const from = ids.indexOf(tab.id);
     const left = widths.slice(0, from).reduce((sum, w) => sum + w, 0);
@@ -56,7 +76,7 @@ export default class Tabs extends View {
   moveDrag(event, cx) {
     const d = this.drag;
     if (!d) return;
-    const current = spaces().find(s => s.id === d.space)?.tabs ?? [];
+    const current = (spaces().find(s => s.id === d.space)?.tabs ?? []).filter(t => !t.settled);
     if (current.map(t => t.id).join("|") !== d.ids.join("|")) { this.cancelDrag(cx); return; }
     const dx = event.position.x - d.origin;
     if (!d.active && Math.abs(dx) < 5) return;
@@ -75,10 +95,14 @@ export default class Tabs extends View {
     if (!d) return;
     this.drag = null;
     cx.stop_propagation();
-    const current = spaces().find(s => s.id === d.space)?.tabs ?? [];
+    const all = spaces().find(s => s.id === d.space)?.tabs ?? [];
+    const current = all.filter(t => !t.settled);
     if (current.map(t => t.id).join("|") === d.ids.join("|")) {
-      if (!d.active) run("tab.select", { id: d.id });
-      else if (d.to !== d.from) run("tab.move", { id: d.id, index: d.to + 1 });
+      if (!d.active) {
+        if (this.coveredTab === d.id) this.coveredTab = null;
+        run("tab.select", { id: d.id });
+      }
+      else if (d.to !== d.from) run("tab.move", { id: d.id, index: all.findIndex(t => t.id === d.ids[d.to]) + 1 });
     }
     cx.notify();
   }
@@ -120,10 +144,27 @@ export default class Tabs extends View {
 
   render() {
     const t = theme();
+    if (props()?.surface === "hidden-empty") {
+      return h_flex().size_full().p(18).justify_center().items_center().bg(t.background).text_color(t.muted)
+        .child(div().child("Выберите сессию слева или откройте новую вкладку."));
+    }
     const projects = shared("trin.projects.v1");
     const project = projects?.projects?.find(p => p.id === projects.selected);
     const space = projects ? spaces().find(s => s.id === project?.space) : spaces().find(p => p.active);
-    const shown = space?.tabs ?? [];
+    const shown = (space?.tabs ?? []).filter(tab => !tab.settled);
+    const allHidden = Boolean(space?.tabs.length && !shown.length);
+    const current = space?.tabs.find(tab => tab.active)?.id;
+    if (this.coveredTab !== current) this.coveredTab = null;
+    if (allHidden) this.coveredTab = current;
+    const reveal = shared("trin.sessions.reveal");
+    if (reveal?.at !== this.restoreRequest) {
+      this.restoreRequest = reveal?.at;
+      if (!allHidden && reveal?.id === this.coveredTab) this.coveredTab = null;
+    }
+    const covered = Boolean(this.coveredTab) || allHidden;
+    const root = layout();
+    const bodyStack = find(root, "session-body"), want = covered ? "hidden-tabs-empty" : "work-body";
+    if (bodyStack && bodyStack.active !== want) run("layout.select", { stack: "session-body", child: want });
     const titles = shared("trin.sessions.titles") ?? {};
     const live = new Map(terminals().map(terminal => [terminal.address, terminal]));
     this.widths ??= new Map();
@@ -139,6 +180,7 @@ export default class Tabs extends View {
       const title = (pane?.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
       const name = verifiedTitle(live.get(pane?.terminal), pane, titles[pane?.terminal])
         || (c.named ? c.name : title || program?.name || "Terminal");
+      const running = c.status === "working" || c.status === "blocked";
       return h_flex().id(ghost ? "tab-drag-ghost" : `tab-${c.id}`).relative().h_full().min_w(110).px(14).gap(8).items_center().flex_none().text_size(13)
         .when(!ghost, el => el.left(this.offset(c.id)).transition("left", { duration: this.drag?.active ? 140 : 0, easing: "ease-out" })
           .when(Boolean(this.drag), el => el.w(this.drag.widths[this.drag.ids.indexOf(c.id)]))
@@ -156,9 +198,11 @@ export default class Tabs extends View {
           .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.cancelDrag(cx); openOverlay({ mod: "trin-tab-menu", kind: "popup", width: 220, props: { target: { id: c.id, space: space.id, project: project?.id } } }); }))
         .child(div().min_w(0).flex_shrink(1).max_w(170).truncate().tooltip(name).child(name))
         .child(div().id(ghost ? "tab-drag-close" : `close-${c.id}`).flex_none().text_color(t.dim)
-          .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.cancelDrag(cx); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12)));
+          .tooltip(running ? "Скрыть вкладку, не останавливая работу" : "Закрыть вкладку")
+          .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.cancelDrag(cx); this.closeOrHide(c.id); })
+          .child(svg("mods/pane/close.svg").size(12)));
     };
-    const root = layout(), sidebar = find(root, "sidebar"), w = window();
+    const sidebar = find(root, "sidebar"), w = window();
     const newTabShortcut = w?.platform === "macos" ? "⌘ T" : "Ctrl T";
     const terminalShortcut = w?.platform === "macos" ? "⇧ ⌘ T" : "Ctrl Shift T";
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -209,8 +253,8 @@ export default class Tabs extends View {
             .on_mouse_down("left", stop).on_click(() => run(project ? `trin-projects.new-terminal--${encodeURIComponent(project.id)}` : "trin-projects.new-terminal"))
             .child(svg("mods/workspace-chrome/terminal.svg").size(12).text_color(t.muted).opacity(0.75))
             .child(div().id("tab-terminal-shortcut").flex_none().text_size(11).text_color(t.dim).opacity(0.65).child(terminalShortcut)))))
-      .when(Boolean(space) && enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
-      .when(Boolean(space) && enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(Boolean(space) && !covered && enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
+      .when(Boolean(space) && !covered && enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/trin-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/trin-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/trin-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

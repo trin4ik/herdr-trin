@@ -1,17 +1,22 @@
 // Tab context actions retain native tab IDs; new work always uses the project root.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, run, theme, closeOverlay, openOverlay } from "herdr";
+import { props, run, spaces, theme, closeOverlay, openOverlay } from "herdr";
 
 export default class TabMenu extends View {
   init(_props, cx) { this.handle = cx.focus_handle(); this.handle.focus(); this.at = 0; }
   items() {
     const target = props()?.target ?? {};
+    const tab = spaces().flatMap(s => s.tabs).find(t => t.id === target.id);
+    const busy = tab?.status === "working" || tab?.status === "blocked";
     return [
       ["Переименовать", () => run("tab.rename", { id: target.id })],
       ["Новая вкладка", () => run(`trin-projects.new-tab${target.project ? "--" + encodeURIComponent(target.project) : ""}`)],
       ["Запустить агента…", () => openOverlay({ mod: "trin-projects", kind: "dialog", width: 520, height: 390, props: { surface: "agents", project: target.project } })],
-      ["Закрыть вкладку", () => run("tab.close", { id: target.id })]
+      [busy ? "Скрыть вкладку" : "Закрыть вкладку", () => {
+        if (target.id) run(`trin-tabs.close--${encodeURIComponent(target.id)}`);
+      }],
+      ...(busy ? [["Остановить и закрыть", () => run("tab.close", { id: target.id })]] : [])
     ];
   }
   choose(i) { const item = this.items()[i]; if (item) { closeOverlay(props().overlay); item[1](); } }

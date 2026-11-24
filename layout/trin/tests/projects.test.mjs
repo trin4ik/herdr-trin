@@ -466,7 +466,8 @@ test("all project hotkeys are scoped to trin and cover empty-context safety", ()
   const keys = JSON.parse(fs.readFileSync(new URL("../keys.json", import.meta.url), "utf8"));
   assert.deepEqual(Object.keys(keys), ["layout:trin"]);
   assert.equal(keys["layout:trin"]["cmd-shift-t"], "trin-projects.new-terminal");
-  for (const key of ["cmd-t", "cmd-w", "cmd-shift-w", "cmd-d", "cmd-shift-d", "ctrl-tab", "cmd-1", "ctrl-1", "cmd-p"]) assert.match(keys["layout:trin"][key], /^trin-projects\./);
+  assert.equal(keys["layout:trin"]["cmd-w"], "trin-tabs.close-current");
+  for (const key of ["cmd-t", "cmd-shift-w", "cmd-d", "cmd-shift-d", "ctrl-tab", "cmd-1", "ctrl-1", "cmd-p"]) assert.match(keys["layout:trin"][key], /^trin-projects\./);
   const layout = JSON.parse(fs.readFileSync(new URL("../layouts/trin.json", import.meta.url), "utf8"));
   const walk = n => [n, ...(n.children ?? []).flatMap(walk)];
   assert.equal(walk(layout).find(n => n.id === "status").content.props.surface, "status");
