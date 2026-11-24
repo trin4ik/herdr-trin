@@ -341,9 +341,9 @@ test("the session list shares the current OpenCode title by terminal and session
   sessionTitle = "Renamed in OpenCode";
   assert.match(label(), /Renamed in OpenCode/);
   spaces[0].tabs[0].named = true;
-  assert.match(label(), /Named session/);
+  assert.match(label(), /Renamed in OpenCode/);
   agents[0].records = { ses_new: report };
-  label();
+  assert.match(label(), /Named session/);
   assert.equal(context.shared("trin.sessions.titles").t0, undefined);
 });
 

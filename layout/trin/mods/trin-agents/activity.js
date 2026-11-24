@@ -4,12 +4,25 @@ export const sessionAddress = (machine, sessionID) => `opencode-session:${encode
 
 export const isOpenCode = (agent, terminal) => agent.app === "opencode" || agent.program?.key === "opencode"
   || (terminal?.report ?? terminal?.status)?.app === "opencode";
+const validID = id => typeof id === "string" && /^ses[A-Za-z0-9_-]+$/.test(id);
+const captionOf = title => (title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
+const sameCaption = (caption, title) => Boolean(caption && title && (caption === title ||
+  (caption.endsWith("…") && caption.length >= 17 && title.startsWith(caption.slice(0, -1).trimEnd()))));
+
+function launchedSessionID(terminal) {
+  const argv = terminal?.foreground?.argv;
+  if (!Array.isArray(argv) || argv[0]?.split(/[\\/]/).at(-1) !== "opencode"
+    || argv.some(arg => arg === "--standalone" || arg === "--server" || arg.startsWith("--server="))) return null;
+  const ids = argv.flatMap((arg, i) => arg === "-s" || arg === "--session" ? [argv[i + 1]]
+    : arg.startsWith("--session=") ? [arg.slice(10)] : []).filter(validID);
+  return ids.length === 1 ? ids[0] : null;
+}
 
 export function terminalSessionID(terminal) {
   const status = terminal?.report ?? terminal?.status;
   if (status?.app && status.app !== "opencode") return null;
   const entries = Object.entries(terminal?.records ?? {}).filter(([id, report]) =>
-    /^ses[A-Za-z0-9_-]+$/.test(id) && report?.app === "opencode");
+    validID(id) && report?.app === "opencode");
   // Herdr can retain multiple reports for a terminal. Only trust the record
   // selected by its aggregate status. Even a single record can be from an
   // earlier session while a newly active session has no keyed report yet.
@@ -19,7 +32,7 @@ export function terminalSessionID(terminal) {
 }
 
 export class ActivityMonitor {
-  constructor() {
+  constructor(titles = {}) {
     this.results = {};
     this.good = {};
     this.zeroes = {};
@@ -29,6 +42,10 @@ export class ActivityMonitor {
     this.targetKeys = new Map();
     this.desiredKeys = new Map();
     this.background = new Map();
+    this.bindings = new Map(Object.entries(titles).filter(([, item]) =>
+      validID(item?.sessionID) && Number.isFinite(item.pid) && Number.isFinite(item.created))
+      .map(([address, item]) => [address, { id: item.sessionID, pid: item.pid,
+        created: item.created, caption: captionOf(item.caption), title: item.title }]));
     this.signature = "";
     this.bridgeKeys = new Map();
     this.bridgeStates = new Map();
@@ -51,7 +68,7 @@ export class ActivityMonitor {
     for (const a of list) {
       const machine = sp.get(a.space)?.machine ?? null;
       if (!groups.has(machine)) continue;
-      const sessionID = terminalSessionID(ts.get(a.address));
+      const sessionID = this.boundSessionID(a, ts.get(a.address), true);
       const previous = this.good[a.address];
       const reusable = sessionID ? previous?.sessionID === sessionID : previous?.title === a.title;
       const target = {
@@ -196,10 +213,44 @@ export class ActivityMonitor {
     return Boolean(info.error) || Date.now() - good.checkedAt > (good.eventBridge ? 45000 : 20000);
   }
 
+  boundSessionID(agent, terminal, forLookup = false) {
+    const address = agent.address;
+    if (!terminal || !isOpenCode(agent, terminal)) return null;
+    const pid = terminal.foreground?.pid ?? terminal.pid ?? null;
+    const created = terminal.created_ms ?? null;
+    const caption = captionOf(agent.title);
+    let old = this.bindings.get(address);
+    if (old && (old.pid !== pid || old.created !== created)) {
+      this.bindings.delete(address);
+      old = null;
+    }
+    const observed = terminalSessionID(terminal);
+    const launched = !old && launchedSessionID(terminal);
+    const id = observed || launched;
+    if (id) {
+      this.bindings.set(address, { id, pid, created, caption, title: old?.id === id ? old.title : undefined });
+      return id;
+    }
+    // An unkeyed working report may be the first turn of a different session.
+    // Keep the last proven binding only while idle, never to merge that turn.
+    if (!old || agent.status === "working" || agent.status === "blocked") return null;
+    const current = this.session(agent, old.id)?.sessionTitle;
+    if (caption === old.caption || sameCaption(caption, current)) {
+      old.caption = caption;
+      return old.id;
+    }
+    // Allow the server rename to catch up without ever painting a stale
+    // title over a terminal that may have switched to another idle session.
+    return forLookup ? old.id : null;
+  }
+
   session(agent, sessionID) {
     const info = this.results[agent.address];
     const known = info?.sessionID && (Object.hasOwn(info, "sessionTitle") || !info.error) ? info : this.good[agent.address];
-    return sessionID && known?.sessionID === sessionID ? known : null;
+    if (!sessionID) return null;
+    if (known?.sessionID === sessionID) return known;
+    const binding = this.bindings.get(agent.address);
+    return binding?.id === sessionID && binding.title ? { sessionID, sessionTitle: binding.title } : null;
   }
 
   backgroundRows() {
@@ -292,6 +343,7 @@ export class ActivityMonitor {
   }
 
   prune(addresses) {
+    for (const address of this.bindings.keys()) if (!addresses.has(address)) this.bindings.delete(address);
     for (const address of Object.keys(this.results)) if (!addresses.has(address)) {
       delete this.results[address];
       delete this.good[address];

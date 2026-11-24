@@ -182,6 +182,7 @@ test("automatic session titles lose OC prefix but explicit names are preserved",
   assert.equal(fn({ named: false }, { title: "OpenCode | Name | detail" }), "Name | detail");
   assert.equal(fn({ named: true, name: "OC | My explicit name" }, { title: "OC | Other" }), "OC | My explicit name");
   assert.equal(fn({ named: false }, { title: "OC | Other" }, "Canonical name"), "Canonical name");
+  assert.equal(fn({ named: true, name: "User alias" }, { title: "OC | Other" }, "Canonical name"), "Canonical name");
 });
 
 test("session metadata remains available with zero task badges", () => {
@@ -266,6 +267,40 @@ test("the OpenCode terminal report supplies the ID without waiting for the termi
   const renamed = { ...agent, title: "renamed before the next bridge reply" };
   assert.equal(monitor.details(renamed, "ses_main").modelID, "confirmed");
   assert.equal(monitor.details(renamed, "ses_new"), null);
+});
+
+test("a proven binding survives idle without records, but not an unkeyed new turn or a different terminal process", () => {
+  const { monitor } = fixture();
+  const report = { app: "opencode", state: "working", title: "Task" };
+  const terminal = { report, records: { ses_1: report }, foreground: { pid: 1 } };
+  const row = { ...agent, app: "opencode", status: "working" };
+  assert.equal(monitor.boundSessionID(row, terminal), "ses_1");
+  terminal.records = {};
+  terminal.report = { app: "opencode", state: "idle" };
+  assert.equal(monitor.boundSessionID({ ...row, status: "idle" }, terminal), "ses_1");
+  assert.equal(monitor.boundSessionID(row, terminal), null);
+  const renamed = { ...row, status: "idle", title: "New name" };
+  assert.equal(monitor.boundSessionID(renamed, terminal), null);
+  assert.equal(monitor.boundSessionID(renamed, terminal, true), "ses_1");
+  monitor.accept({ t1: { ...live, sessionID: "ses_1", sessionTitle: "New name" } });
+  assert.equal(monitor.boundSessionID(renamed, terminal), "ses_1");
+  monitor.accept({ t1: { ...live, sessionID: "ses_1", sessionTitle: "Second rename while label is unchanged" } });
+  assert.equal(monitor.boundSessionID(renamed, terminal), "ses_1");
+  terminal.foreground = { pid: 2 };
+  assert.equal(monitor.boundSessionID(renamed, terminal), null);
+});
+
+test("an idle OpenCode tab launched with an explicit ID follows renames without a terminal record", () => {
+  const { monitor } = fixture();
+  const row = { ...agent, app: "opencode", status: "idle" };
+  const terminal = { report: { app: "opencode", state: "idle" },
+    foreground: { pid: 1, argv: ["/bin/opencode", "--session", "ses_1"] } };
+  assert.equal(monitor.boundSessionID(row, terminal), "ses_1");
+  monitor.accept({ t1: { ...live, sessionID: "ses_1", sessionTitle: "Renamed" } });
+  assert.equal(monitor.session(row, "ses_1").sessionTitle, "Renamed");
+  assert.equal(monitor.boundSessionID({ ...row, address: "t2" }, { ...terminal, foreground: {
+    ...terminal.foreground, argv: [...terminal.foreground.argv, "--server", "other"],
+  } }), null);
 });
 
 test("background sessions appear without terminal targets and disappear on completion or disconnect", async () => {

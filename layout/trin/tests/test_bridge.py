@@ -170,6 +170,16 @@ class FollowTests(unittest.TestCase):
         self.assertEqual(result["reason"], "event")
         self.assertEqual(result["snapshot"]["t1"]["sessionID"], "ses_1")
 
+    def test_rename_alone_publishes_the_new_name_while_session_is_idle(self):
+        before = snapshot(sessionTitle="Old name")
+        after = snapshot(sessionTitle="Renamed")
+        event = b'data: {"type":"session.renamed","data":{"sessionID":"ses_1","title":"Renamed"}}\n\n'
+        result, order = self.run_follow([before, after], [event], bridge.fingerprint(before),
+                                        targets=[{"address": "t1", "sessionID": "ses_1", "title": "Old name"}])
+        self.assertEqual(result["reason"], "event")
+        self.assertEqual(result["snapshot"]["t1"]["sessionTitle"], "Renamed")
+        self.assertEqual(order.count("snapshot"), 2)
+
     def test_model_effort_context_and_lifecycle_events_publish_changed_metadata(self):
         for kind in ["session.model.selected", "session.agent.selected", "session.metadata.updated",
                      "session.usage.updated", "session.step.ended", "session.compaction.started",

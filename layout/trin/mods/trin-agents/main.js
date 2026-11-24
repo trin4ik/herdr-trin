@@ -35,17 +35,17 @@ function toggleSidebar() {
   run("layout.resize", { id: "sidebar", px: collapsed ? (shared("sidebar.width") ?? 268) : 44 });
 }
 
-// Match session tabs: an explicit tab name wins, otherwise use the live title.
+// Match session tabs: the bound OpenCode session owns its displayed name.
 function sessionName(tab, agent, canonical) {
   const title = (agent.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
-  return (tab?.named ? tab.name : canonical || title || agent.program?.name)
+  return canonical || (tab?.named ? tab.name : title || agent.program?.name)
     || tab?.name || "Agent";
 }
 export default class Agents extends View {
   init(_props, cx) {
     this.order = parseOrder(localStorage.getItem(ORDER_KEY) ?? localStorage.getItem("pins"));
     this.drag = null;
-    this.activity = new ActivityMonitor();
+    this.activity = new ActivityMonitor(shared(TITLES_KEY) ?? {});
     this.clock = new WorkingClock();
     this.live = !checking();
     if (!this.live) return;
@@ -166,7 +166,7 @@ export default class Agents extends View {
     for (const agent of agents()) {
       const terminal = all.get(agent.address);
       if (terminal?.parent) continue;
-      const sessionID = terminalSessionID(terminal);
+      const sessionID = this.activity.boundSessionID?.(agent, terminal) ?? terminalSessionID(terminal);
       const machine = spaceById.get(agent.space)?.machine ?? null;
       if (!sessionID && isOpenCode(agent, terminal) && (agent.status === "working" || agent.status === "blocked")) {
         unresolvedMachines.add(machine);
@@ -182,7 +182,8 @@ export default class Agents extends View {
         aliases.set(agent.address, id);
         const title = typeof session?.sessionTitle === "string"
           ? [...session.sessionTitle.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim()].slice(0, 256).join("") : "";
-        if (title) titles[agent.address] = { sessionID, title };
+        if (title) titles[agent.address] = { sessionID, title, caption: agent.title ?? "",
+          pid: terminal?.foreground?.pid ?? terminal?.pid ?? null, created: terminal?.created_ms ?? null };
       }
       const previous = attached.get(id)?.agent;
       if (!previous || (agent.focused && !previous.focused) || (agent.focused === previous.focused

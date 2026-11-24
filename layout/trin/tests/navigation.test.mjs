@@ -169,7 +169,7 @@ test("each tab contains only title and close, including inactive and working tab
   }
 });
 
-test("unnamed tabs display the verified OpenCode title and do not reuse another session's name", () => {
+test("tabs display the verified OpenCode title even if named, and do not reuse another session's name", () => {
   const initial = [{ id: "space", active: true, tabs: [tab("a")] }];
   const f = fixture("trin-tabs", initial);
   const report = { app: "opencode", state: "working", title: "Terminal name…" };
@@ -185,6 +185,14 @@ test("unnamed tabs display the verified OpenCode title and do not reuse another 
   assert.equal(name(), "Terminal name…");
   terminal.records = { ses_live: report };
   f.setList([{ ...initial[0], tabs: [{ ...tab("a"), named: true, name: "User alias" }] }]);
+  assert.equal(name(), "Renamed on the server");
+  terminal.records = {};
+  terminal.report = { app: "opencode", state: "idle" };
+  Object.assign(f.sharedState["trin.sessions.titles"].t1, { pid: 12, created: 34, caption: "OC | Terminal name…" });
+  terminal.pid = 12;
+  terminal.created_ms = 34;
+  assert.equal(name(), "Renamed on the server");
+  terminal.pid = 13;
   assert.equal(name(), "User alias");
   assert.deepEqual(f.commands, []);
 });

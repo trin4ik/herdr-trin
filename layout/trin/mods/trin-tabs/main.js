@@ -11,14 +11,17 @@ function find(node, id) {
   return null;
 }
 
-function verifiedTitle(terminal, value) {
+function verifiedTitle(terminal, pane, value) {
   if (!value || !terminal) return "";
   const report = terminal.report;
   const current = terminal.records?.[value.sessionID];
-  if (current?.app !== "opencode" || report?.app !== "opencode") return "";
-  const matches = Object.values(terminal.records).filter(r =>
-    r?.app === "opencode" && r.state === report.state && r.title === report.title);
-  return matches.length === 1 && matches[0] === current ? value.title : "";
+  if (report?.app !== "opencode" && pane.program?.key !== "opencode") return "";
+  const matches = Object.values(terminal.records ?? {}).filter(r =>
+    r?.app === "opencode" && (!report || (r.state === report.state && r.title === report.title)));
+  if (matches.length) return matches.length === 1 && matches[0] === current ? value.title : "";
+  return value.pid === (terminal.foreground?.pid ?? terminal.pid ?? null)
+    && value.created === (terminal.created_ms ?? null) && value.caption === pane.title
+    ? value.title : "";
 }
 
 export default class Tabs extends View {
@@ -134,8 +137,8 @@ export default class Tabs extends View {
       const pane = tabPanes.find(p => p.program?.agent) ?? tabPanes.find(p => p.focused) ?? tabPanes[0];
       const program = pane?.program;
       const title = (pane?.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
-      const name = c.named ? c.name : verifiedTitle(live.get(pane?.terminal), titles[pane?.terminal])
-        || title || program?.name || "Terminal";
+      const name = verifiedTitle(live.get(pane?.terminal), pane, titles[pane?.terminal])
+        || (c.named ? c.name : title || program?.name || "Terminal");
       return h_flex().id(ghost ? "tab-drag-ghost" : `tab-${c.id}`).relative().h_full().min_w(110).px(14).gap(8).items_center().flex_none().text_size(13)
         .when(!ghost, el => el.left(this.offset(c.id)).transition("left", { duration: this.drag?.active ? 140 : 0, easing: "ease-out" })
           .when(Boolean(this.drag), el => el.w(this.drag.widths[this.drag.ids.indexOf(c.id)]))
