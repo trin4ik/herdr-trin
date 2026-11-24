@@ -104,9 +104,9 @@ test("wide Sessions tints only unread results blue and retains the status dot", 
   context.layout = () => ({ id: "sidebar", size: { px: 268 } });
   const root = panel.render();
   const done = byID(root, "ag-t3");
-  assert.equal(done.attrs.bg[0], "#3b82f620");
+  assert.equal(done.attrs.bg[0], "#3b82f630");
   const hovered = done.attrs.hover[0](element());
-  assert.equal(hovered.attrs.bg[0], "#3b82f62b");
+  assert.equal(hovered.attrs.bg[0], "#3b82f63b");
   assert.ok(nodes(done).some(n => n.attrs.tooltip?.[0] === "Готово" && n.attrs.bg?.[0] === t.done));
   assert.equal(byID(root, "ag-t1").attrs.bg[0], t.selected);
   for (const id of ["ag-t0", "ag-t2"]) assert.equal(byID(root, id).attrs.bg, undefined);
