@@ -34,6 +34,7 @@ const click = row => {
 };
 
 function fixture(storage = {}) {
+  let now = 1000;
   const spaces = [{ id: "s", name: "Herdr", active: true, tabs: [{ id: "tab", named: true, name: "Named session" }] }];
   const agents = ["working", "idle", "blocked", "done"].map((status, seq) => ({
     address: `t${seq}`, pane: `p${seq}`, space: "s", tab: "tab", status, seq,
@@ -42,6 +43,7 @@ function fixture(storage = {}) {
   const commands = [], badges = [], stored = {};
   const t = { accent: "#8ab4f8", chrome: "#101112", selected: "#25272b", muted: "#999999", dim: "#777777", idle: "#777777", working: "#d9bc65", blocked: "#e09080", done: "#8cb383" };
   const context = { View: class {}, div: element, svg: path => element().asset(path), h_flex: element, v_flex: element,
+    Date: { now: () => now },
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "",
     theme: () => t, layout: () => ({ id: "sidebar", size: { px: 44 } }),
     spaces: () => spaces, agents: () => agents, terminals: () => agents,
@@ -53,12 +55,12 @@ function fixture(storage = {}) {
     run: (name, args) => commands.push({ name, args }),
   };
   vm.runInNewContext(read("trin-agents/order.js") + "\n" + read("trin-agents/appearance.js") + "\n"
-    + read("trin-agents/activity.js") + "\n" + read("trin-agents/main.js")
+    + read("trin-agents/activity.js") + "\n" + read("trin-agents/background.js") + "\n" + read("trin-agents/main.js")
     + "\nthis.AgentsPanel = Agents;", context);
   const panel = new context.AgentsPanel();
   Object.assign(panel, { order: JSON.parse(storage["sessions.order"] ?? storage.pins ?? "[]"), clock: { sync() {}, value: () => null },
     activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
-  return { panel, commands, badges, agents, context, t, spaces, storage };
+  return { panel, commands, badges, agents, context, t, spaces, storage, advance: ms => { now += ms; } };
 }
 
 test("Dock badge sums live blocked and unseen done sessions reactively across projects", () => {
@@ -155,10 +157,12 @@ test("only main Herdr sessions appear, even when child terminals have panes or p
 });
 
 test("background sessions are visible and read-only, with no terminal navigation entries", () => {
-  const { panel, commands, agents, context } = fixture();
+  const { panel, commands, agents, context, advance } = fixture();
   panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_job", background: true,
     title: "Background job", folder: "/fixture", program: { name: "OpenCode" }, status: "working" }];
   panel.activity.session = a => a === agents[1] ? { excluded: true } : null;
+  panel.render();
+  advance(1000);
   for (const width of [44, 268]) {
     context.layout = () => ({ id: "sidebar", size: { px: width } });
     const root = panel.render();
@@ -203,11 +207,13 @@ test("sessions support drop before and after, persist order and preserve click-t
 });
 
 test("a background session can be reordered and keeps its position when it gets a pane", () => {
-  const { panel, agents, storage, commands } = fixture();
+  const { panel, agents, storage, commands, advance } = fixture();
   const detached = { address: "opencode-session:/ses_job", sessionID: "ses_job", background: true,
     title: "Background job", folder: "/fixture", program: { name: "OpenCode" }, status: "working" };
   let running = true;
   panel.activity.backgroundRows = () => running ? [detached] : [];
+  panel.render();
+  advance(1000);
   const row = id => byID(panel.render(), `ag-${id}`);
   row(detached.address).handlers.on_mouse_down(mouse(10), cx);
   row("t0").handlers.on_mouse_move(mouse(70), cx);
@@ -226,7 +232,7 @@ test("a background session can be reordered and keeps its position when it gets 
 });
 
 test("live terminal IDs merge immediately, even with different titles; different IDs do not merge", () => {
-  const { panel, agents, badges, context } = fixture();
+  const { panel, agents, badges, context, advance } = fixture();
   const report = { app: "opencode", state: "done", title: "Full title before rename" };
   Object.assign(agents[3], { report, records: { ses_job: report }, title: "Truncated terminal title…" });
   const secondPane = { ...agents[3], address: "t-same", focused: true };
@@ -236,12 +242,88 @@ test("live terminal IDs merge immediately, even with different titles; different
   const remote = { ...job, address: "opencode-session:server/ses_job", machine: "server" };
   panel.activity.backgroundRows = () => [job, unrelated, remote];
   panel.activity.session = () => null; // no results from the async bridge yet
+  panel.render();
+  advance(1000);
   assert.deepEqual(sessionRows(panel), ["t0", "t1", "t2", "t-same", unrelated.address, remote.address]);
   assert.deepEqual(Array.from(context.order), ["t0", "t1", "t2", "t-same"]);
   assert.deepEqual(badges, ["2"], "the same completed session counts only once");
   agents.pop();
   agents[3].records = { ses_next: report };
+  panel.render();
+  advance(1000);
   assert.ok(sessionRows(panel).includes(job.address), "switching IDs releases the previous session");
+});
+
+test("first-message race: the new OpenCode name never flashes as a second row before its ID arrives", () => {
+  const { panel, agents, advance } = fixture();
+  const row = agents[0];
+  row.app = "opencode";
+  row.title = "OpenCode";
+  const incoming = [
+    { address: "opencode-session:/ses_new", title: "First prompt title", status: "working", background: true },
+    { address: "opencode-session:server/ses_remote", title: "Other machine", status: "working", background: true, machine: "server" },
+  ];
+  panel.activity.backgroundRows = () => incoming;
+  const provisional = ["t0", "t1", "t2", "t3"];
+  assert.deepEqual(sessionRows(panel), provisional, "a new candidate does not appear in the first frame");
+  advance(12000);
+  assert.deepEqual(sessionRows(panel), [...provisional, incoming[1].address],
+    "no duplicate even if the working terminal is still missing its session ID after the grace interval");
+  row.title = "Renamed terminal";
+  row.report = { app: "opencode", state: "working", title: "First prompt title" };
+  row.records = { ses_new: row.report };
+  assert.deepEqual(sessionRows(panel), [...provisional, incoming[1].address],
+    "the identified tab owns the row, even before the API statistics arrive");
+  row.status = "done";
+  row.report.state = "idle";
+  assert.deepEqual(sessionRows(panel), [...provisional, incoming[1].address]);
+});
+
+test("a genuine background row waits only for same-machine working ambiguity, without flapping existing rows", () => {
+  const { panel, agents, advance } = fixture();
+  const ids = ["opencode-session:/ses_shown", "opencode-session:/ses_waiting"];
+  let visible = [ids[0]];
+  panel.activity.backgroundRows = () => visible.map(address => ({ address, status: "working", background: true }));
+  panel.render();
+  advance(1000);
+  assert.ok(sessionRows(panel).includes(ids[0]));
+  const row = agents[0];
+  row.app = "opencode";
+  row.status = "working";
+  visible = ids;
+  panel.render();
+  advance(5000);
+  assert.ok(sessionRows(panel).includes(ids[0]), "existing rows do not flicker");
+  assert.ok(!sessionRows(panel).includes(ids[1]));
+  row.status = "idle";
+  assert.ok(!sessionRows(panel).includes(ids[1]), "the grace restarts once the ambiguity clears");
+  advance(1000);
+  assert.deepEqual(sessionRows(panel).slice(-2), ids);
+});
+
+test("a one-shot redraw releases genuine background rows in the narrow panel without other events", () => {
+  const { panel, advance } = fixture();
+  const id = "opencode-session:/ses_detached";
+  panel.activity.backgroundRows = () => [{ address: id, status: "working", background: true }];
+  const scheduled = [];
+  let redraws = 0;
+  const native = { notify: () => redraws++, timer: { after(ms, fn) {
+    const task = { ms, fn, cancelled: false, cancel() { this.cancelled = true; } };
+    scheduled.push(task);
+    return task;
+  } } };
+  assert.equal(byID(panel.render(native), `ag-${id}`), undefined);
+  assert.equal(scheduled[0].ms, 1000);
+  panel.render(native);
+  assert.equal(scheduled.length, 1);
+  advance(1000);
+  scheduled[0].fn(native);
+  assert.equal(redraws, 1);
+  assert.ok(byID(panel.render(native), `ag-${id}`));
+  panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_new", status: "working", background: true }];
+  panel.render(native);
+  panel.close();
+  assert.equal(scheduled.at(-1).cancelled, true);
 });
 
 test("the session list shares the current OpenCode title by terminal and session ID", () => {

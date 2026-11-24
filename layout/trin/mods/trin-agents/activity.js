@@ -2,15 +2,18 @@ import { agents, terminals, panes, spaces, machines, exec, readTextFile, appHome
 
 export const sessionAddress = (machine, sessionID) => `opencode-session:${encodeURIComponent(machine ?? "")}/${sessionID}`;
 
+export const isOpenCode = (agent, terminal) => agent.app === "opencode" || agent.program?.key === "opencode"
+  || (terminal?.report ?? terminal?.status)?.app === "opencode";
+
 export function terminalSessionID(terminal) {
   const status = terminal?.report ?? terminal?.status;
   if (status?.app && status.app !== "opencode") return null;
   const entries = Object.entries(terminal?.records ?? {}).filter(([id, report]) =>
     /^ses[A-Za-z0-9_-]+$/.test(id) && report?.app === "opencode");
-  if (entries.length === 1) return entries[0][0];
   // Herdr can retain multiple reports for a terminal. Only trust the record
-  // selected by its aggregate status, and never guess among identical reports.
-  if (status?.app !== "opencode") return null;
+  // selected by its aggregate status. Even a single record can be from an
+  // earlier session while a newly active session has no keyed report yet.
+  if (status?.app !== "opencode" || (!status.state && !status.title)) return entries.length === 1 ? entries[0][0] : null;
   const chosen = entries.filter(([, report]) => report.state === status.state && report.title === status.title);
   return chosen.length === 1 ? chosen[0][0] : null;
 }
@@ -43,8 +46,7 @@ export class ActivityMonitor {
     const ts = new Map(terminals().map(t => [t.address, t]));
     // Discovery must work even on a ready machine with no Herdr terminals.
     const groups = new Map(machines().filter(m => m.layout === "ready").map(m => [m.name ?? null, []]));
-    const list = agents().filter(a => !ts.get(a.address)?.parent
-      && (a.app === "opencode" || a.program?.key === "opencode"));
+    const list = agents().filter(a => !ts.get(a.address)?.parent && isOpenCode(a, ts.get(a.address)));
     this.prune(new Set(list.map(a => a.address)));
     for (const a of list) {
       const machine = sp.get(a.space)?.machine ?? null;

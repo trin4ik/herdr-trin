@@ -3,7 +3,8 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
-import { ActivityMonitor, sessionAddress, terminalSessionID } from "./activity.js";
+import { ActivityMonitor, isOpenCode, sessionAddress, terminalSessionID } from "./activity.js";
+import { BackgroundAdmission } from "./background.js";
 import { WorkingClock } from "./metrics.js";
 import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
 import { parseOrder, orderedSessions, moveSession } from "./order.js";
@@ -63,8 +64,25 @@ export default class Agents extends View {
 
   close() {
     this.drag = null;
+    this.backgroundTimer?.cancel();
     this.activity?.close();
     if (this.badge !== undefined) setBadge(null);
+  }
+
+  admittedBackground(cx, claimed, unresolvedMachines, now) {
+    this.backgroundAdmission ??= new BackgroundAdmission();
+    const { rows, wakeAt } = this.backgroundAdmission.update(this.activity.backgroundRows?.() ?? [],
+      claimed, unresolvedMachines, now);
+    if (cx && wakeAt !== this.backgroundWakeAt) {
+      this.backgroundTimer?.cancel();
+      this.backgroundWakeAt = wakeAt;
+      this.backgroundTimer = Number.isFinite(wakeAt) ? cx.timer.after(Math.max(1, wakeAt - now), cx => {
+        this.backgroundWakeAt = undefined;
+        this.backgroundTimer = null;
+        cx.notify();
+      }) : null;
+    }
+    return rows;
   }
 
   updateBadge(list) {
@@ -141,6 +159,7 @@ export default class Agents extends View {
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
     const aliases = new Map(), attached = new Map(), sessionIDs = new Map(), excluded = new Set();
+    const unresolvedMachines = new Set();
     const titles = {};
     // `agents()` can also contain a child that was kept as a tab. Its
     // parent link is independent of whether the terminal has its own pane.
@@ -149,6 +168,9 @@ export default class Agents extends View {
       if (terminal?.parent) continue;
       const sessionID = terminalSessionID(terminal);
       const machine = spaceById.get(agent.space)?.machine ?? null;
+      if (!sessionID && isOpenCode(agent, terminal) && (agent.status === "working" || agent.status === "blocked")) {
+        unresolvedMachines.add(machine);
+      }
       const id = sessionID ? sessionAddress(machine, sessionID) : agent.address;
       const session = this.activity.session?.(agent, sessionID);
       if (session?.excluded) {
@@ -192,11 +214,11 @@ export default class Agents extends View {
       run("pane.focus", { pane: a.pane });
     };
     // Track work time even when the compact rail doesn't show it.
-    this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), Date.now());
-    for (const agent of this.activity.backgroundRows?.() ?? []) {
-      if (!attached.has(agent.address) && !excluded.has(agent.address)) {
-        attached.set(agent.address, { id: agent.address, agent });
-      }
+    const now = Date.now();
+    this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), now);
+    const claimed = new Set([...attached.keys(), ...excluded]);
+    for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now)) {
+      attached.set(agent.address, { id: agent.address, agent });
     }
     const rows = [...attached.values()];
     this.renderOrder = [...new Set(this.order.map(id => aliases.get(id) ?? id))];

@@ -258,6 +258,8 @@ test("the OpenCode terminal report supplies the ID without waiting for the termi
   assert.equal(terminalSessionID(terminal), "ses_main");
   assert.equal(terminalSessionID({ ...terminal, records: { ...terminal.records, ses_same: report } }), null);
   assert.equal(terminalSessionID({ ...terminal, report: { app: "claude" } }), null);
+  assert.equal(terminalSessionID({ ...terminal, report: { ...report, title: "New unkeyed session" },
+    records: { ses_old: report } }), null);
   monitor.refresh(cx);
   await tasks[0];
   assert.equal(calls[0][0].sessionID, "ses_main");
