@@ -52,7 +52,9 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   Подписка Claude по умолчанию: `["anthropic", "claude-agent"]`. Каждый вызов
   оценивается по правилам своего провайдера, `quota.usage` — общая сумма по окну.
 - `quota.model` — optional id модели провайдера (иначе DisplayName) для Claude
-  `weekly_scoped`; ограничивает окно одной моделью. Не заменяет `scope`;
+  `weekly_scoped`, либо фильтр семейства/списка семейств через запятую (например
+  `gemini`, `argon`, `claude,gpt` для пулов Google Antigravity); ограничивает
+  локальный учёт окна соответствующими моделями. Не заменяет `scope`;
   UI может игнорировать поле. Старые файлы без обоих полей читаются как прежде.
 - `plan`, `account_email`, `source` optional/null. Email только явное поле, без
   control characters, trim и ≤300 символов в UI; не выводится из ID/source.
@@ -118,6 +120,13 @@ Remote только HTTPS без URL credentials/query. Транспорт не 
   метаданных, сверенных с активным credential после запроса usage. Для ключей
   и при недоступных или неподтверждённых метаданных адрес остаётся `null`.
   Сборщик не запрашивает баланс, бюджеты и free-счётчики.
+- Google Antigravity (`opencode_antigravity`): `POST /v1internal:retrieveUserQuotaSummary`
+  возвращает все пулы и окна аккаунта (включая `gemini_5h`, `gemini_weekly`,
+  `3p_5h`, `3p_weekly`, опциональный Argon и будущие бакеты). `gemini_5h` идёт
+  первым, чтобы UI выбирал 5-часовой лимит Gemini основным в строке; `quota.model`
+  разделяет локальный учёт вызовов и USD между пулами (`gemini`, `argon`, `claude,gpt`).
+  Тариф (`Google AI Pro` / `Google AI Ultra`) читается отдельно через `loadCodeAssist`
+  по расписанию профиля; истёкший 1-часовой access token даёт `auth_required` без refresh.
 
 Полный четырёхпровайдерный synthetic fixture:
 `layout/trin/tests/fixtures/quota-v1.json`; исполняемый UI-validator —

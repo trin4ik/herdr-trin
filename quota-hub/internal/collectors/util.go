@@ -1,6 +1,7 @@
 package collectors
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -42,12 +43,14 @@ const (
 	ProviderKimi     = "kimi"
 	ProviderClaude   = "claude"
 	ProviderOpenCode = "opencode"
+	ProviderGoogle   = "google"
 
-	SourceNativeCodexOAuth = "native_codex_oauth"
-	SourceOpenCodeKey      = "opencode_key"
-	SourceOpenCodeObserved = "opencode_observed"
-	SourceOpenCodeConsole  = "opencode_console"
-	SourceClaudeProxy      = "claude_proxy"
+	SourceNativeCodexOAuth    = "native_codex_oauth"
+	SourceOpenCodeKey         = "opencode_key"
+	SourceOpenCodeObserved    = "opencode_observed"
+	SourceOpenCodeConsole     = "opencode_console"
+	SourceOpenCodeAntigravity = "opencode_antigravity"
+	SourceClaudeProxy         = "claude_proxy"
 
 	EndpointCodex    = "https://chatgpt.com/backend-api/wham/usage"
 	EndpointOllama   = "https://ollama.com/api/balance"
@@ -61,9 +64,16 @@ const (
 	// Fixed OpenCode Go allowance origin; never supplied by a credential.
 	EndpointConsoleGo = "https://opencode.ai/zen/go/v1/usage"
 
-	OpenCodeConsoleIntegration = "opencode"
+	// Fixed Google Antigravity Cloud Code endpoints; never supplied by a credential.
+	EndpointGoogleQuotaSummary   = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+	EndpointGoogleLoadCodeAssist = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+
+	OpenCodeConsoleIntegration   = "opencode"
+	GoogleAntigravityIntegration = "google"
 
 	KimiGlobalIntegration = "kimi-code-plan-global"
+
+	googleAntigravityUserAgent = "antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=1000335682)"
 
 	maxBodyBytes = 256 << 10
 	maxCredBytes = 1 << 20
@@ -152,6 +162,25 @@ func (b *base) request(ctx context.Context, method, target string, headers map[s
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	return b.do(ctx, req, limit)
+}
+
+// postJSON performs exactly one JSON POST with the same client limits as get.
+func (b *base) postJSON(ctx context.Context, target string, headers map[string]string, payload []byte, limit int64) (*response, *model.ErrorInfo) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fail(CodeConfigInvalid)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return b.do(ctx, req, limit)
+}
+
+func (b *base) do(ctx context.Context, req *http.Request, limit int64) (*response, *model.ErrorInfo) {
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return nil, classifyTransport(ctx, err)

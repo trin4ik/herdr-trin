@@ -119,6 +119,8 @@ func (s Spec) UsageProvider() *string {
 		provider = s.IntegrationID
 	case s.Provider == ProviderOpenCode && s.Source == SourceOpenCodeConsole:
 		provider = "opencode"
+	case s.Provider == ProviderGoogle && s.Source == SourceOpenCodeAntigravity:
+		provider = s.IntegrationID
 	}
 	if provider == "" {
 		return nil

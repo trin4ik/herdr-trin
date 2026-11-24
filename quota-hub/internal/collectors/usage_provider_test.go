@@ -19,6 +19,7 @@ func TestUsageProvider(t *testing.T) {
 		{ProviderKimi, SourceOpenCodeKey, "kimi-code-plan-cn", "kimi-code-plan-cn"},
 		{ProviderKimi, SourceOpenCodeKey, "kimi-code-plan-global", "kimi-code-plan-global"},
 		{ProviderOpenCode, SourceOpenCodeConsole, "opencode", "opencode"},
+		{ProviderGoogle, SourceOpenCodeAntigravity, "google", "google"},
 		{"other", "other", "", ""},
 	} {
 		t.Run(tc.provider+"/"+tc.integration, func(t *testing.T) {

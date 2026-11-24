@@ -1,5 +1,22 @@
 # Публичный журнал
 
+## 2026-11-24 — квоты и учёт Google (Antigravity)
+
+- В `quota-hub` добавлен read-only сборщик `provider: google`,
+  `source: opencode_antigravity`: читает активный OAuth access token интеграции
+  `google` (`methodID: antigravity`) из локального OpenCode `/api/credential` без
+  refresh, раз в 5 минут опрашивает `retrieveUserQuotaSummary` и публикует все
+  возвращённые пулы/окна (`gemini_5h` первым, затем `gemini_weekly`, Argon при
+  наличии, `3p_5h`, `3p_weekly` и любые новые бакеты). Тариф (`Google AI Pro` и др.)
+  читается отдельно через `loadCodeAssist` с перепроверкой credential; при протухании
+  1-часового токена возвращается `auth_required` с сохранением last-good.
+- В `quota-usage` добавлены оценка API-эквивалента для моделей
+  `google/antigravity-*` по first-party ценам каталога models.dev (без цен
+  посредников) и разделение учёта вызовов/USD между пулами (`gemini`, `argon`,
+  `claude,gpt`) через `quota.model`.
+- Проверены `go test -race ./...`, `go vet ./...`, `-check-config`, тесты bridge,
+  `test_deploy.py`, `test_public.py` и `check-public.py`.
+
 ## 2026-11-23 — Claude: провайдеры anthropic и claude-agent вместе
 
 - Подписка Claude по умолчанию считает вызовы `anthropic` и `claude-agent`;

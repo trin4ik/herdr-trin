@@ -99,17 +99,72 @@ func (s snapshot) lookup(provider, id string) (rate, []tier, bool) {
 		}
 		return s.lookupByModelID(id)
 	}
-	models := entry.Models
+	if r, tiers, found := lookupProviderModels(entry.Models, id, false); found {
+		return r, tiers, true
+	}
+	if provider == "google" {
+		if r, tiers, found := s.lookupAntigravity(id); found {
+			return r, tiers, true
+		}
+	}
+	return rate{}, nil, false
+}
+
+func lookupProviderModels(models map[string]model, id string, requireCost bool) (rate, []tier, bool) {
 	if m, ok := models[id]; ok {
+		if requireCost && m.Cost == nil {
+			return rate{}, nil, false
+		}
 		r, tiers := m.Cost.table()
 		return r, tiers, true
 	}
 	for base, m := range models {
 		for name, mode := range m.Experimental.Modes {
 			if base+"-"+name == id {
+				if requireCost && m.Cost == nil && mode.Cost == nil {
+					return rate{}, nil, false
+				}
 				r, tiers := modeTable(m.Cost, mode.Cost)
 				return r, tiers, true
 			}
+		}
+	}
+	return rate{}, nil, false
+}
+
+var antigravityVariantSuffixes = []string{
+	"-minimal", "-low", "-medium", "-high", "-xhigh", "-max", "-thinking", "-tiered",
+}
+
+// lookupAntigravity resolves opencode-antigravity-auth model IDs under provider
+// "google" (e.g. "antigravity-gemini-4-neon-high",
+// "antigravity-gemini-4-hydrogen-tiered-xhigh",
+// "antigravity-claude-opus-5-5-thinking") to their first-party catalog price.
+// Reseller prices are never substituted.
+func (s snapshot) lookupAntigravity(id string) (rate, []tier, bool) {
+	rest, ok := strings.CutPrefix(id, "antigravity-")
+	if !ok || rest == "" {
+		return rate{}, nil, false
+	}
+	googleModels := s["google"].Models
+	cand := rest
+	for step := 0; step <= 3 && cand != ""; step++ {
+		if r, tiers, found := lookupProviderModels(googleModels, cand, true); found {
+			return r, tiers, true
+		}
+		if r, tiers, found := s.lookupByModelID(cand); found {
+			return r, tiers, true
+		}
+		trimmed := false
+		for _, suffix := range antigravityVariantSuffixes {
+			if next, cut := strings.CutSuffix(cand, suffix); cut && next != "" {
+				cand = next
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
 		}
 	}
 	return rate{}, nil, false

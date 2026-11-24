@@ -461,3 +461,32 @@ func TestClaudeDefaultsToAnthropicAndClaudeAgent(t *testing.T) {
 		t.Fatalf("%v %v", specs[3].OpenCodeProviders, err)
 	}
 }
+
+func TestGoogleAntigravityConfig(t *testing.T) {
+	c := valid(t)
+	c.Subscriptions = []Subscription{{ID: "google-primary", Provider: "google", Enabled: true}}
+	specs, err := c.Specs()
+	if err != nil || len(specs) != 1 {
+		t.Fatalf("google spec: %+v %v", specs, err)
+	}
+	s := specs[0]
+	if s.Source != "opencode_antigravity" || s.Product != "google_antigravity" ||
+		s.IntegrationID != "google" || s.Interval != 5*time.Minute ||
+		s.OpenCodeProvider == nil || *s.OpenCodeProvider != "google" {
+		t.Fatalf("unexpected google defaults: %+v", s)
+	}
+	for name, bad := range map[string]Subscription{
+		"wrong integration": {IntegrationID: "gemini"},
+		"credential file":   {CredentialFile: "/nonexistent/auth.json"},
+		"observed file":     {ObservedFile: "/nonexistent/google.json"},
+		"wrong source":      {Source: "opencode_key"},
+		"display name":      {DisplayName: "Google"},
+		"remote url":        {RemoteURL: "https://example.com/v1/subscription-limits"},
+	} {
+		bad.ID, bad.Provider, bad.Enabled = "google-primary", "google", true
+		c.Subscriptions = []Subscription{bad}
+		if _, err := c.Specs(); err == nil {
+			t.Fatalf("%s unexpectedly accepted", name)
+		}
+	}
+}

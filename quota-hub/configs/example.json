@@ -14,6 +14,11 @@
       "interval": "5m"
     },
     {
+      "id": "google-primary", "provider": "google", "enabled": false,
+      "source": "opencode_antigravity", "integration_id": "google",
+      "interval": "5m", "stale_after": "30m"
+    },
+    {
       "id": "claude-agent-passive", "provider": "claude", "enabled": false,
       "observed_file": "/absolute/path/to/.local/state/quota-hub/bridge/claude.latest.json",
       "interval": "30s", "opencode_providers": ["anthropic", "claude-agent"],

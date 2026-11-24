@@ -243,3 +243,33 @@ func TestQuotaWindowSumsAnthropicAndClaudeAgent(t *testing.T) {
 		t.Fatal(len(instances))
 	}
 }
+
+func TestQuotaWindowSeparatesGooglePoolsByModelList(t *testing.T) {
+	i := importer(t)
+	start, reset := clock.Add(-time.Hour), clock.Add(time.Hour)
+	records := []Record{
+		{Event: Event{Time: start.UnixMilli(), Provider: pointer("google"), Model: pointer("antigravity-gemini-4-neon-high")}, USD: pointer(1.25)},
+		{Event: Event{Time: start.UnixMilli(), Provider: pointer("google"), Model: pointer("antigravity-gemini-4-argon-high")}, USD: pointer(0.50)},
+		{Event: Event{Time: start.UnixMilli(), Provider: pointer("google"), Model: pointer("antigravity-claude-opus-5-5-thinking")}, USD: pointer(2.00)},
+		{Event: Event{Time: start.UnixMilli(), Provider: pointer("google"), Model: pointer("antigravity-gpt-oss-120b-medium")}},
+	}
+	for _, record := range records {
+		b, _ := json.Marshal(record)
+		if err := appendLedger(filepath.Join(i.Dir, "ledger", day(record.Time)+".jsonl"), append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gemini, err := reportQuotaWindow(i.Dir, QuotaWindow{Provider: "google", Model: pointer("gemini"), Start: &start, Reset: reset})
+	if err != nil || gemini.Calls != 2 || gemini.USD != 1.75 || gemini.Unpriced != 0 {
+		t.Fatalf("gemini pool: %+v %v", gemini, err)
+	}
+	argon, err := reportQuotaWindow(i.Dir, QuotaWindow{Provider: "google", Model: pointer("argon"), Start: &start, Reset: reset})
+	if err != nil || argon.Calls != 1 || argon.USD != 0.50 {
+		t.Fatalf("argon pool: %+v %v", argon, err)
+	}
+	thirdParty, err := reportQuotaWindow(i.Dir, QuotaWindow{Provider: "google", Model: pointer("claude,gpt"), Start: &start, Reset: reset})
+	if err != nil || thirdParty.Calls != 2 || thirdParty.USD != 2.00 || thirdParty.Unpriced != 1 {
+		t.Fatalf("3p pool: %+v %v", thirdParty, err)
+	}
+}

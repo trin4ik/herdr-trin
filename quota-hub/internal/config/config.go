@@ -378,6 +378,23 @@ func (c Config) spec(entry Subscription) (collectors.Spec, error) {
 		if s.ObservedFile != "" || entry.ObserveInterval != "" || entry.ClaudeFallback != nil {
 			return s, errors.New("opencode Go uses only remote usage; remove legacy observed_file/observe_interval/fallback")
 		}
+	case "google":
+		s.Source, s.Product = collectors.SourceOpenCodeAntigravity, "google_antigravity"
+		if s.OpenCodeServiceFile == "" {
+			if err := validateOpenCodeURL(s.OpenCodeURL); err != nil {
+				return s, err
+			}
+		}
+		if s.CredentialFile != "" || s.ObservedFile != "" || entry.ObserveInterval != "" || entry.ClaudeFallback != nil ||
+			entry.RemoteURL != "" || entry.TokenEnv != "" || entry.DisplayName != "" {
+			return s, errors.New("google antigravity uses OpenCode credential API only")
+		}
+		if s.IntegrationID == "" {
+			s.IntegrationID = collectors.GoogleAntigravityIntegration
+		}
+		if s.IntegrationID != collectors.GoogleAntigravityIntegration {
+			return s, errors.New("google antigravity requires integration_id google")
+		}
 	default:
 		return s, errors.New("unsupported enabled provider")
 	}

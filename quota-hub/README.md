@@ -12,6 +12,7 @@ Headless Go-сборщик → private last-good/history/cooldown → норма
 | Ollama | Active key `ollama-cloud` из OpenCode `/api/credential` | Нужен доступ к owning service |
 | Kimi | Active key явно выбранной `kimi-code-plan-cn` или `kimi-code-plan-global` | Не угадывать регион по имени аккаунта |
 | OpenCode Go | Credential `opencode` из OpenCode `/api/credential` → Go usage opencode.ai | Только платный allowance; сессия не обновляется |
+| Google | Active OAuth `google` (`methodID: antigravity`) из OpenCode `/api/credential` → `retrieveUserQuotaSummary` + профиль `loadCodeAssist` | Access token живёт ~1ч и обновляется самим OpenCode при запросах; без refresh в сборщике при простое даёт `auth_required` и держит last-good |
 
 Не PIN/device-code login: сервис использует уже существующий вход и не выполняет
 auth switch/refresh. Нет отдельной поддержки произвольного API-key env для

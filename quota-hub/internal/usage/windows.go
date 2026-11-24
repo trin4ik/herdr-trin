@@ -145,8 +145,8 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 				key := windowKey(subscription.ID, quota.ID)
 				previous, exists := s.QuotaWindows[key]
 				reset := quota.Window.ResetAt.UTC()
-				// A changed provider binding re-records the same window, so its calls count from now on.
-				if exists && slices.Equal(previous.providers(), bound) &&
+				// A changed provider binding or model scope re-records the same window, so its calls count from now on.
+				if exists && slices.Equal(previous.providers(), bound) && equalStringPtr(previous.Model, quota.Model) &&
 					reset.Sub(previous.Reset) >= -120*time.Second && reset.Sub(previous.Reset) <= 120*time.Second {
 					continue
 				}
@@ -214,6 +214,24 @@ func (i *Importer) updateQuotas(s *state, summary *Summary, now time.Time) error
 
 var modelSeparators = regexp.MustCompile(`[^a-z0-9]`)
 
+func equalStringPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func matchesWindowModel(filter, modelName string) bool {
+	haystack := "-" + strings.ToLower(modelName) + "-"
+	for _, part := range strings.Split(filter, ",") {
+		slug := strings.Trim(modelSeparators.ReplaceAllString(strings.ToLower(part), "-"), "-")
+		if slug != "" && strings.Contains(haystack, "-"+slug+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 func reportQuotaWindow(dir string, window QuotaWindow) (WindowReport, error) {
 	start := window.SeenAt
 	if window.Start != nil {
@@ -226,8 +244,7 @@ func reportQuotaWindow(dir string, window QuotaWindow) (WindowReport, error) {
 		if window.Model == nil {
 			return true
 		}
-		slug := strings.Trim(modelSeparators.ReplaceAllString(strings.ToLower(*window.Model), "-"), "-")
-		return record.Model != nil && strings.Contains("-"+strings.ToLower(*record.Model)+"-", "-"+slug+"-")
+		return record.Model != nil && matchesWindowModel(*window.Model, *record.Model)
 	})
 	return WindowReport{
 		Subscription: window.Subscription, Quota: window.Quota, Provider: window.Provider, Providers: window.Providers,

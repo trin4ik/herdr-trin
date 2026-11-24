@@ -472,3 +472,50 @@ func TestClaudeAgentAliasUsesNewestAnthropicFamilyModel(t *testing.T) {
 		}
 	}
 }
+
+func TestAntigravityModelPricing(t *testing.T) {
+	i := importer(t)
+	var err error
+	i.prices, err = decodePrices([]byte(`{
+		"google":{"models":{
+			"gemini-4-neon":{"canonical_model_id":"google/gemini-4-neon","cost":{"input":3,"output":15,"cache_read":0.15}},
+			"gemini-4-hydrogen":{"canonical_model_id":"google/gemini-4-hydrogen","cost":{"input":1.5,"output":7.5,"cache_read":0.075}},
+			"gemini-3.8-flash":{"canonical_model_id":"google/gemini-3.8-flash","cost":{"input":0.75,"output":3.75,"cache_read":0.075}},
+			"gemini-no-price":{"canonical_model_id":"google/gemini-no-price"}
+		}},
+		"anthropic":{"models":{
+			"claude-opus-5-5":{"canonical_model_id":"anthropic/claude-opus-5-5","cost":{"input":4,"output":20,"cache_read":0.2,"cache_write":5}},
+			"claude-sonnet-5-5":{"canonical_model_id":"anthropic/claude-sonnet-5-5","cost":{"input":2,"output":10}}
+		}},
+		"openai":{"models":{
+			"gpt-oss-120b":{"canonical_model_id":"openai/gpt-oss-120b"}
+		}},
+		"reseller":{"models":{
+			"gpt-oss-120b":{"canonical_model_id":"openai/gpt-oss-120b","cost":{"input":0.5,"output":1.5}}
+		}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		provider, model string
+		want            float64
+		priced          bool
+	}{
+		{"google", "antigravity-gemini-4-neon-high", 3, true},
+		{"google", "antigravity-gemini-4-hydrogen-tiered-xhigh", 1.5, true},
+		{"google", "antigravity-gemini-3.8-flash-low", 0.75, true},
+		{"google", "antigravity-claude-opus-5-5-thinking", 4, true},
+		{"google", "antigravity-claude-opus-5-5-thinking-high", 4, true},
+		{"google", "antigravity-claude-sonnet-5-5", 2, true},
+		{"google", "antigravity-gpt-oss-120b-medium", 0, false},
+		{"google", "antigravity-gemini-no-price-high", 0, false},
+		{"google", "antigravity-unknown-high", 0, false},
+		{"other", "antigravity-gemini-4-neon-high", 0, false},
+	} {
+		usd, price := i.price(Event{Provider: &tt.provider, Model: &tt.model, Tokens: Tokens{Input: 1e6}})
+		if tt.priced != (usd != nil && price.Status == "ok") || (tt.priced && *usd != tt.want) {
+			t.Fatalf("%s/%s: usd %v price %+v; want priced=%v usd=%v", tt.provider, tt.model, usd, price, tt.priced, tt.want)
+		}
+	}
+}

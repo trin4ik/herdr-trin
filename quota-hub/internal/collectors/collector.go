@@ -109,6 +109,20 @@ func New(spec Spec, opts Options) (Collector, error) {
 			return nil, err
 		}
 		return &openCodeConsoleCollector{base: b, oc: oc, goUsage: goUsage}, nil
+	case spec.Provider == ProviderGoogle && spec.Source == SourceOpenCodeAntigravity:
+		oc, err := newOpenCodeKey(spec, opts)
+		if err != nil {
+			return nil, err
+		}
+		ep, err := endpoint("google_quota", EndpointGoogleQuotaSummary)
+		if err != nil {
+			return nil, err
+		}
+		pep, err := endpoint("google_profile", EndpointGoogleLoadCodeAssist)
+		if err != nil {
+			return nil, err
+		}
+		return &googleAntigravityCollector{base: b, oc: oc, endpoint: ep, profileEndpoint: pep}, nil
 	}
 	return nil, fail(CodeConfigInvalid)
 }
@@ -185,15 +199,16 @@ type credentialEntry struct {
 	Value         json.RawMessage `json:"value"`
 }
 
-// key returns the single matching API key; any ambiguity or non-key type is refused.
-func (o *openCodeKey) key(ctx context.Context) (string, string, *model.ErrorInfo) {
+// rawCredentials fetches the raw JSON body of OpenCode GET /api/credential.
+// Caller must zero the returned slice after parsing.
+func (o *openCodeKey) rawCredentials(ctx context.Context) ([]byte, *model.ErrorInfo) {
 	headers := map[string]string{}
 	target := o.url
 	if o.file != "" {
 		var auth string
 		var e *model.ErrorInfo
 		if target, auth, e = o.registration(); e != nil {
-			return "", "", e
+			return nil, e
 		}
 		if auth != "" {
 			headers["Authorization"] = auth
@@ -201,35 +216,44 @@ func (o *openCodeKey) key(ctx context.Context) (string, string, *model.ErrorInfo
 	} else if name := o.spec.OpenCodeBearerEnv; name != "" {
 		tok := strings.TrimSpace(os.Getenv(name))
 		if !validHeaderToken(tok) {
-			return "", "", fail(CodeCredentialsUnavailable)
+			return nil, fail(CodeCredentialsUnavailable)
 		}
 		headers["Authorization"] = "Bearer " + tok
 	}
 	r, e := o.get(ctx, target, headers, maxCredBytes)
 	if e != nil {
 		if e.Code == CodeInvalidResponse || e.Code == CodeConfigInvalid {
-			return "", "", fail(CodeCredentialsUnavailable)
+			return nil, fail(CodeCredentialsUnavailable)
 		}
-		return "", "", e
+		return nil, e
 	}
 	if r.status != http.StatusOK {
 		// The local credential service may itself throttle or be unavailable.
 		// Keep its Retry-After instead of converting every failure to missing keys.
 		if r.status == 401 || r.status == 403 || r.status == 429 || r.status >= 500 {
-			return "", "", o.statusError(r)
+			return nil, o.statusError(r)
 		}
-		return "", "", failStatus(CodeCredentialsUnavailable, r.status)
+		return nil, failStatus(CodeCredentialsUnavailable, r.status)
 	}
-	defer zero(r.body)
+	return r.body, nil
+}
+
+// key returns the single matching API key; any ambiguity or non-key type is refused.
+func (o *openCodeKey) key(ctx context.Context) (string, string, *model.ErrorInfo) {
+	body, e := o.rawCredentials(ctx)
+	if e != nil {
+		return "", "", e
+	}
+	defer zero(body)
 	var entries []json.RawMessage
 	var wrapper struct {
 		Data json.RawMessage `json:"data"`
 	}
-	if json.Unmarshal(r.body, &wrapper) == nil && wrapper.Data != nil {
+	if json.Unmarshal(body, &wrapper) == nil && wrapper.Data != nil {
 		if json.Unmarshal(wrapper.Data, &entries) != nil {
 			return "", "", fail(CodeCredentialsUnavailable)
 		}
-	} else if json.Unmarshal(r.body, &entries) != nil {
+	} else if json.Unmarshal(body, &entries) != nil {
 		return "", "", fail(CodeCredentialsUnavailable)
 	}
 	var match []credentialEntry

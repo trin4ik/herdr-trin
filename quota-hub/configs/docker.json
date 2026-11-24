@@ -22,6 +22,7 @@
     },
     { "id": "ollama-primary", "provider": "ollama", "enabled": false, "integration_id": "ollama-cloud" },
     { "id": "kimi-primary", "provider": "kimi", "enabled": false, "integration_id": "kimi-code-plan-global" },
-    { "id": "opencode-go", "provider": "opencode", "enabled": false, "integration_id": "opencode" }
+    { "id": "opencode-go", "provider": "opencode", "enabled": false, "integration_id": "opencode" },
+    { "id": "google-primary", "provider": "google", "enabled": false, "source": "opencode_antigravity", "integration_id": "google" }
   ]
 }
