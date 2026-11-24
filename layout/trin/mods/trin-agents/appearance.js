@@ -1,4 +1,4 @@
-// Native GPUI presentation. State, timers, commands and grouping live in main.js.
+// Native GPUI presentation. State, timers and commands live in main.js.
 import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { shared } from "herdr";
@@ -52,14 +52,13 @@ export function spaceAvatar(space, t) {
     .child([...(space?.name ?? "")][0]?.toUpperCase() ?? "?");
 }
 
-// compact: a ! for blocked where a header already says "Needs you".
-export function statusIndicator(t, status, compact = false) {
+export function statusIndicator(t, status) {
   const color = t[status] ?? t.dim;
-  if (status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-  if (status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
-  if (status === "blocked") return div().flex_none().px(6).h(LINE_HEIGHT).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
-  if (status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
-  return div().size(7).mx(3).flex_none().rounded(4).bg(status === "done" ? color : t.dim + "00");
+  if (status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900).tooltip("В работе");
+  if (status === "blocked") return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().tooltip("Нужно ваше действие").child("!");
+  if (status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim).tooltip("Ожидает");
+  return div().size(7).mx(3).flex_none().rounded(4).bg(status === "done" ? color : t.dim + "00")
+    .when(status === "done", el => el.tooltip("Готово"));
 }
 
 function activityBadges(t, info, address) {

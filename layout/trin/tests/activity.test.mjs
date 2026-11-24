@@ -228,6 +228,19 @@ function bridgeFixture(exec, extra = {}) {
   }, notifications: () => notifications };
 }
 
+test("Herdr child terminals with panes are not OpenCode bridge targets", async () => {
+  const root = { ...agent, app: "opencode", space: "local" };
+  const child = { ...root, address: "t2", pane: "p2", title: "Child" };
+  const calls = [];
+  const { monitor, cx, tasks } = bridgeFixture(async (_cmd, args) => {
+    calls.push(JSON.parse(args[2]).map(t => t.address));
+    return { code: 0, stdout: JSON.stringify({ connected: false, snapshot: { t1: live } }) };
+  }, { agents: () => [root, child], terminals: () => [{ address: "t2", parent: "t1" }] });
+  monitor.refresh(cx);
+  await tasks[0];
+  assert.deepEqual(calls, [["t1"]]);
+});
+
 test("healthy event bridge reconnects itself, reuses key and never duplicates an in-flight subscription", async () => {
   const calls = [];
   let release;

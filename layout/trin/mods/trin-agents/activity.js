@@ -27,7 +27,8 @@ export class ActivityMonitor {
     const ps = new Map(panes().map(p => [p.pane, p]));
     const ts = new Map(terminals().map(t => [t.address, t]));
     const groups = new Map();
-    const list = agents().filter(a => a.app === "opencode" || a.program?.key === "opencode");
+    const list = agents().filter(a => !ts.get(a.address)?.parent
+      && (a.app === "opencode" || a.program?.key === "opencode"));
     this.prune(new Set(list.map(a => a.address)));
     for (const a of list) {
       const machine = sp.get(a.space)?.machine ?? null;

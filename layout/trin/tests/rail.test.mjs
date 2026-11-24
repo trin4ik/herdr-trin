@@ -34,7 +34,7 @@ function fixture() {
   const t = { accent: "#8ab4f8", chrome: "#101112", selected: "#25272b", muted: "#999999", dim: "#777777", idle: "#777777", working: "#d9bc65", blocked: "#e09080", done: "#8cb383" };
   const context = { View: class {}, div: element, svg: path => element().asset(path), h_flex: element, v_flex: element,
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "",
-    theme: () => t, props: () => ({}), layout: () => ({ id: "sidebar", size: { px: 44 } }),
+    theme: () => t, layout: () => ({ id: "sidebar", size: { px: 44 } }),
     spaces: () => spaces, agents: () => agents, terminals: () => agents,
     shared: key => stored[key], setShared: (key, value) => { stored[key] = value; },
     focused: () => ({ agent: "t1" }), setAgentOrder: order => { context.order = order; },
@@ -46,7 +46,7 @@ function fixture() {
   vm.runInNewContext(read("trin-agents/appearance.js") + "\n" + read("trin-agents/main.js")
     + "\nthis.AgentsPanel = Agents;", context);
   const panel = new context.AgentsPanel();
-  Object.assign(panel, { pins: [], changed: {}, folded: new Set(), clock: { sync() {}, value: () => null },
+  Object.assign(panel, { pins: [], clock: { sync() {}, value: () => null },
     activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
   return { panel, commands, badges, agents, context, t, spaces };
 }
@@ -59,10 +59,8 @@ test("Dock badge sums live blocked and unseen done sessions reactively across pr
   panel.render();
   assert.deepEqual(badges, ["2"], "unchanged renders do not write the badge");
   context.layout = () => ({ id: "sidebar", size: { px: 268 } });
-  context.setShared("agents.sort", "grouped");
-  panel.folded = new Set(["s", "remote/other-project"]);
   panel.render();
-  assert.deepEqual(badges, ["2"], "wide/grouped/folded presentation does not change the count");
+  assert.deepEqual(badges, ["2"], "wide presentation does not change the count");
   agents.push({ ...agents[2] });
   panel.render();
   assert.deepEqual(badges, ["2"], "duplicate panes count once by terminal address");
@@ -77,26 +75,57 @@ test("Dock badge sums live blocked and unseen done sessions reactively across pr
   assert.equal(badges.at(-1), "1", "reconnected/new sessions count immediately");
   panel.close();
   assert.equal(badges.at(-1), null, "closing the panel clears its badge");
-  context.props = () => ({ sortMenu: true });
-  const menu = new context.AgentsPanel();
-  const before = badges.length;
-  menu.render();
-  menu.close();
-  assert.equal(badges.length, before, "sort-menu overlays never write or clear the badge");
 });
 
-test("Dock badge clears on initial empty snapshot and ignores held Done presentation", () => {
+test("Dock badge clears on initial empty snapshot and ignores idle and working", () => {
   const { panel, badges } = fixture();
   panel.updateBadge([]);
   panel.updateBadge([]);
   assert.deepEqual(badges, [null]);
-  panel.held = { address: "seen", rank: 3 };
   const seen = { address: "seen", status: "idle" };
-  assert.equal(panel.rank(seen), 3);
   panel.updateBadge([seen, { address: "busy", status: "working" }]);
   assert.deepEqual(badges, [null]);
   panel.updateBadge([{ address: "waiting", status: "blocked", focused: true }]);
   assert.equal(badges.at(-1), "1", "blocked counts until resolved even while focused");
+});
+
+test("wide Agents drops the title, sort control and sections, preserving tab order and explicit pins", () => {
+  const { panel, agents, context } = fixture();
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  context.setShared("agents.sort", "grouped");
+  const rows = () => {
+    const root = panel.render();
+    assert.equal(byID(root, "ag-sort"), undefined);
+    assert.doesNotMatch(text(root), /Agents|Needs you|Working|Idle|Pinned/);
+    return byID(root, "ag-list").childNodes.map(n => n.attrs.id[0]);
+  };
+  assert.deepEqual(Array.from(rows()), ["ag-t0", "ag-t1", "ag-t2", "ag-t3"]);
+  agents[0].status = "done";
+  agents[3].status = "working";
+  assert.deepEqual(Array.from(rows()), ["ag-t0", "ag-t1", "ag-t2", "ag-t3"]);
+  panel.pins = ["t2"];
+  assert.deepEqual(Array.from(rows()), ["ag-t2", "ag-t0", "ag-t1", "ag-t3"]);
+  assert.deepEqual(Array.from(context.order), ["t2", "t0", "t1", "t3"]);
+});
+
+test("only main Herdr sessions appear, even when child terminals have panes or pins", () => {
+  const { panel, agents, badges, context } = fixture();
+  const child = { address: "child", pane: "child-pane", status: "blocked", state: "live" };
+  const orphan = { address: "orphan", pane: "orphan-pane", status: "done", state: "live" };
+  agents.push(child, orphan);
+  context.terminals = () => [...agents.slice(0, 4), { ...child, parent: "t0" },
+    { ...orphan, parent: "offline/starter" }, { address: "nested", parent: "child", state: "live" }];
+  panel.pins = ["child"];
+  for (const width of [44, 268]) {
+    context.layout = () => ({ id: "sidebar", size: { px: width } });
+    const root = panel.render();
+    for (const id of ["ag-child", "ag-orphan", "sub-child", "sub-nested", "fold-t0"]) {
+      assert.equal(byID(root, id), undefined);
+    }
+    assert.ok(byID(root, "ag-t0"));
+    assert.deepEqual(Array.from(context.order), ["t0", "t1", "t2", "t3"]);
+  }
+  assert.deepEqual(badges, ["2"]);
 });
 
 test("agent rail uses project squares, state indicators and full session tooltips, not numbers", () => {
