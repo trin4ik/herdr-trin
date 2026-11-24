@@ -77,7 +77,7 @@ class ParserTests(unittest.TestCase):
 
 
 class FollowTests(unittest.TestCase):
-    def run_follow(self, snapshots, events=(), previous=None, targets=None):
+    def run_follow(self, snapshots, events=(), previous=None, targets=None, backgrounds=()):
         order = []
         self.collected_targets = []
         self.dirty_at_collect = []
@@ -103,15 +103,16 @@ class FollowTests(unittest.TestCase):
             finally:
                 order.append("close")
         values = iter(snapshots)
+        background_values = iter(backgrounds)
         def collect(api, targets):
             order.append("snapshot")
             self.collected_targets.append(copy.deepcopy(targets))
             self.dirty_at_collect.append(copy.deepcopy(getattr(api, "dirty_sessions", set())))
-            return next(values)
+            return next(values), next(background_values, [])
         api = type("API", (), {})()
         api.shell_cache = {"at": 100, "items": []}
         self.api = api
-        with patch.object(bridge, "subscribe", subscribe), patch.object(bridge, "collect", collect), \
+        with patch.object(bridge, "subscribe", subscribe), patch.object(bridge, "collect_panel", collect), \
                 patch.object(bridge.select, "select", side_effect=[([0], [], [])] * max(0, len(events) - 1) + [([], [], [])] * 20):
             result = bridge.follow(api, targets or [], previous)
         return result, order
@@ -128,6 +129,18 @@ class FollowTests(unittest.TestCase):
         self.assertEqual(result["reason"], "event")
         self.assertEqual(result["snapshot"]["t1"]["shells"], 1)
         self.assertEqual(order, ["subscribe", "snapshot", "read", "snapshot", "close"])
+
+    def test_background_only_uses_lifecycle_events_and_publishes_start_and_finish(self):
+        working = [{"sessionID": "ses_job", "title": "Job", "folder": "/fixture"}]
+        for initial, final, kind in [([], working, "started"), (working, [], "succeeded")]:
+            with self.subTest(kind=kind):
+                event = ('data: {"type":"session.execution.' + kind + '"}\n\n').encode()
+                result, order = self.run_follow([{}, {}], [event], bridge.fingerprint({}, initial),
+                                                backgrounds=[initial, final])
+                self.assertEqual(result["background"], final)
+                self.assertEqual(result["reason"], "event")
+                self.assertEqual(order, ["subscribe", "snapshot", "read", "snapshot", "close"])
+                self.assertNotIn("session.text.delta", self.api.event_types)
 
     def test_text_deltas_and_connect_notification_do_not_query(self):
         first = snapshot()

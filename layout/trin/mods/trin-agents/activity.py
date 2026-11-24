@@ -307,10 +307,70 @@ def match_session(api, target):
     return same_place[0] if len(same_place) == 1 else None
 
 
-def collect(api, targets):
+def hidden_session(session):
+    return bool(session.get("parentID")) or (session.get("time") or {}).get("archived") is not None
+
+
+def active_sessions(api):
+    active = api.get("/api/session/active")["data"]
+    if not isinstance(active, dict) or len(active) > 128:
+        raise Unavailable()
+    return active
+
+
+def collect_panel(api, targets):
+    """The same active snapshot feeds terminal metrics and discovery."""
+    active = active_sessions(api)
     cache = {}
+
+    def lookup(sid):
+        try:
+            item = api.get("/api/session/" + urllib.parse.quote(sid, safe=""))["data"]
+            return item if item["id"] == sid else None
+        except Exception:
+            return None
+
+    ids = sorted(sid for sid, status in active.items()
+                 if sid.startswith("ses") and status.get("type") == "running")
+    background = []
+    if ids:
+        # Discovery has a small budget of its own; optional display metadata
+        # cannot monopolize the lease or starve existing terminal metrics.
+        deadline = api.deadline
+        api.deadline = min(deadline, time.monotonic() + 3)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                for sid, item in zip(ids, pool.map(lookup, ids)):
+                    if item is None:
+                        continue
+                    cache[sid] = item
+                    if hidden_session(item):
+                        continue
+                    model = item.get("model") or {}
+                    background.append({
+                        "sessionID": sid, "title": item.get("title") or "OpenCode",
+                        "folder": (item.get("location") or {}).get("directory"),
+                        "meta": {"modelID": model.get("id"), "providerID": model.get("providerID"),
+                                 "variant": model.get("variant")},
+                    })
+        finally:
+            api.deadline = deadline
+    snapshot = {}
+    if targets:
+        try:
+            collect(api, targets, active=active, cache=cache, output=snapshot)
+        except Exception:
+            for target in targets:
+                info = snapshot.setdefault(target["address"], {"title": target["title"]})
+                if not info.get("excluded") and "meta" not in info:
+                    info["error"] = "Session metrics are temporarily unavailable"
+    return snapshot, background
+
+
+def collect(api, targets, *, active=None, cache=None, output=None):
+    cache = {} if cache is None else cache
+    output = {} if output is None else output
     matched = {}
-    output = {}
     model_cache = {}
     for target in targets:
         try:
@@ -322,13 +382,15 @@ def collect(api, targets):
             output[target["address"]] = {"title": target["title"], "error": "Session match is missing or ambiguous"}
             continue
         cache[session["id"]] = session
+        output[target["address"]] = {"title": target["title"], "sessionID": session["id"]}
+        if hidden_session(session):
+            output[target["address"]]["excluded"] = True
+            continue
         matched[target["address"]] = session["id"]
     if not matched:
         return output
 
-    active = api.get("/api/session/active")["data"]
-    if len(active) > 128:
-        raise Unavailable()
+    active = active_sessions(api) if active is None else active
 
     def shells_at(directory):
         return api.get("/api/shell", **{"location[directory]": directory})["data"]

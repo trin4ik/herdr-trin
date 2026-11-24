@@ -74,7 +74,7 @@ function activityBadges(t, info, address) {
     .when(info.shells > 0, el => el.child(badge("shells", info.shells, shellsTooltip(info))));
 }
 
-export function sessionDetails(t, meta, activity, elapsed, address) {
+export function sessionDetails(t, meta, activity, elapsed, address, background = false) {
   const provider = meta?.providerID;
   const model = meta?.modelID;
   const mark = modelMark(model) ?? (Object.hasOwn(PROVIDER_MARKS, provider) ? PROVIDER_MARKS[provider] : null);
@@ -93,8 +93,10 @@ export function sessionDetails(t, meta, activity, elapsed, address) {
         .child(div().flex_none().max_w("100%").truncate().child(modelLabel(model)))
         .when(Boolean(meta?.variant), el => el.child(div().min_w(0).flex_shrink(1).overflow_hidden().whitespace_nowrap().text_color(t.ansi3).child(`@${meta.variant}`)))))
     .when(Boolean(activity), el => el.child(activityBadges(t, activity, address)))
-    .child(div().id(`agent-${address}-context`).flex_none().text_color(t.ansi4).tooltip(contextTooltip(meta))
-      .child(formatTokens(meta?.contextTokens)))
-    .child(div().id(`agent-${address}-time`).flex_none().font_family("JetBrains Mono").text_color(t.muted).tooltip(timingTitle)
-      .child(elapsed == null ? "…" : formatActiveTime(elapsed)));
+    .when(background, el => el.child(div().flex_none().child("В фоне")))
+    .when(!background, el => el
+      .child(div().id(`agent-${address}-context`).flex_none().text_color(t.ansi4).tooltip(contextTooltip(meta))
+        .child(formatTokens(meta?.contextTokens)))
+      .child(div().id(`agent-${address}-time`).flex_none().font_family("JetBrains Mono").text_color(t.muted).tooltip(timingTitle)
+        .child(elapsed == null ? "…" : formatActiveTime(elapsed))));
 }

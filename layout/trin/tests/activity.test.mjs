@@ -11,7 +11,7 @@ const { WorkingClock } = await import(`data:text/javascript,${encodeURIComponent
 
 function fixture(extra = {}) {
   let now = 1000;
-  const context = { Date: { now: () => now }, ...extra };
+  const context = { Date: { now: () => now }, machines: () => [{ name: null, layout: "ready" }], ...extra };
   vm.runInNewContext(source, context);
   return { monitor: new context.Monitor(), advance: ms => now += ms };
 }
@@ -143,6 +143,7 @@ test("a pending SSH bridge does not delay local publication or recovery", async 
   const list = [{ ...agent, app: "opencode", space: "local" }, remote];
   const { monitor, advance } = fixture({
     agents: () => list,
+    machines: () => [{ name: null, layout: "ready" }, { name: "ssh-host", layout: "ready" }],
     spaces: () => [{ id: "local", machine: null }, { id: "remote", machine: "ssh-host" }],
     panes: () => [],
     terminals: () => [],
@@ -239,6 +240,36 @@ test("Herdr child terminals with panes are not OpenCode bridge targets", async (
   monitor.refresh(cx);
   await tasks[0];
   assert.deepEqual(calls, [["t1"]]);
+});
+
+test("background sessions appear without terminal targets and disappear on completion or disconnect", async () => {
+  let topology = [{ name: null, layout: "ready" }, { name: "ssh-host", layout: "ready" }];
+  const item = { sessionID: "ses_same", title: "Real job", folder: "/job" };
+  let running = true, calls = 0;
+  const { monitor, cx, tasks, tick } = bridgeFixture(async (_cmd, args, { on, timeout }) => {
+    assert.equal(timeout, 27000);
+    assert.deepEqual(JSON.parse(args[2]), []);
+    calls++;
+    return { code: 0, stdout: JSON.stringify({ connected: true, key: "ok", snapshot: {},
+      background: running || on ? [item] : [] }) };
+  }, { agents: () => [], machines: () => topology });
+  monitor.refresh(cx);
+  await Promise.all([...tasks]);
+  assert.equal(calls, 2);
+  assert.equal(monitor.backgroundRows([]).length, 2, "IDs are scoped to the machine's managed service");
+  monitor.accept({ t1: { ...live, sessionID: item.sessionID } });
+  const rows = monitor.backgroundRows([{ agent, machine: null }]);
+  assert.equal(rows.length, 1, "attached session suppresses its own background copy");
+  assert.equal(rows[0].machine, "ssh-host");
+  assert.match(rows[0].address, /^opencode-session:/);
+  running = false;
+  topology = [topology[0], { name: "ssh-host", layout: "unavailable" }];
+  monitor.refresh(cx);
+  tick();
+  await Promise.all([...tasks]);
+  assert.equal(monitor.backgroundRows([]).length, 0);
+  assert.equal(calls, 3, "do not query a disconnected machine");
+  monitor.close();
 });
 
 test("healthy event bridge reconnects itself, reuses key and never duplicates an in-flight subscription", async () => {

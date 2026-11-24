@@ -128,6 +128,25 @@ test("only main Herdr sessions appear, even when child terminals have panes or p
   assert.deepEqual(badges, ["2"]);
 });
 
+test("background sessions are visible and read-only, with no terminal navigation entries", () => {
+  const { panel, commands, agents, context } = fixture();
+  panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_job", background: true,
+    title: "Background job", folder: "/fixture", program: { name: "OpenCode" }, status: "working" }];
+  panel.activity.session = a => a === agents[1] ? { excluded: true } : null;
+  for (const width of [44, 268]) {
+    context.layout = () => ({ id: "sidebar", size: { px: width } });
+    const root = panel.render();
+    assert.equal(byID(root, "ag-t1"), undefined);
+    const row = byID(root, "ag-opencode-session:/ses_job");
+    assert.ok(row);
+    assert.equal(row.handlers.on_click, undefined);
+    assert.deepEqual(Array.from(context.order), ["t0", "t2", "t3"]);
+    if (width === 44) assert.match(row.attrs.tooltip[0], /Background job.*\n.*\n.*\nФоновая сессия/);
+    else assert.match(text(row), /Background job.*В фоне/);
+  }
+  assert.deepEqual(commands, []);
+});
+
 test("agent rail uses project squares, state indicators and full session tooltips, not numbers", () => {
   const { panel, agents, commands, context } = fixture();
   const root = panel.render();

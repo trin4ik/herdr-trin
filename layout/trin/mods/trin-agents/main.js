@@ -2,7 +2,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout } from "herdr";
+import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
 import { ActivityMonitor } from "./activity.js";
 import { WorkingClock } from "./metrics.js";
 import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
@@ -38,6 +38,8 @@ export default class Agents extends View {
     this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     this.activity = new ActivityMonitor();
     this.clock = new WorkingClock();
+    this.live = !checking();
+    if (!this.live) return;
     this.activity.refresh(cx);
     // Maintain topology/retry scheduling, not a 5s API poll. Each machine has
     // one outstanding SSE bridge call; healthy calls reconnect themselves.
@@ -84,19 +86,23 @@ export default class Agents extends View {
     const t = theme();
     // Herdr invalidates this view when terminals/titles change. Bootstrap the
     // new target immediately rather than waiting for the 5s retry timer.
-    if (cx) this.activity?.refresh(cx);
+    if (cx && this.live) this.activity?.refresh(cx);
     const collapsed = narrow();
     const all = terminals();
     // `agents()` can also contain a child that was kept as a tab. Its
     // parent link is independent of whether the terminal has its own pane.
     const children = new Set(all.filter(terminal => terminal.parent).map(terminal => terminal.address));
-    const roots = agents().filter(a => !children.has(a.address));
+    const roots = agents().filter(a => !children.has(a.address) && !this.activity.session?.(a)?.excluded);
     this.working = roots.some(a => a.status === "working");
-    this.updateBadge(roots);
+    if (this.live !== false) this.updateBadge(roots);
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
     const projects = shared("trin.projects.v1")?.projects ?? [];
     const spaceOf = a => {
+      if (a.background) {
+        const at = projects.filter(p => p.folder === a.folder && p.machine === a.machine);
+        return at.length === 1 ? at[0] : { name: a.folder?.split(/[\\/]/).filter(Boolean).at(-1) || "OpenCode" };
+      }
       const s = spaceById.get(a.space) ?? { id: a.space, name: a.space_name };
       const p = projects.find(p => p.space === a.space);
       return p ? { ...s, name: p.name, color: p.color } : s;
@@ -111,15 +117,19 @@ export default class Agents extends View {
     this.prunePins(all);
     const pinned = this.pins.map(p => roots.find(a => a.address === p)).filter(Boolean);
     const list = [...pinned, ...roots.filter(a => !this.pins.includes(a.address))];
-    setAgentOrder(list.map((a) => a.address));
+    if (this.live !== false) setAgentOrder(list.map((a) => a.address));
+    const background = this.activity.backgroundRows?.(roots.map(agent => ({
+      agent, machine: spaceById.get(agent.space)?.machine ?? null,
+    }))) ?? [];
 
     const tabs = sp.flatMap(s => s.tabs);
     const label = (a) => sessionName(tabs.find(tab => tab.id === a.tab), a);
 
     const row = (a) => {
       const pic = spaceAvatar(spaceOf(a), t);
+      const meta = a.background ? a.meta : this.activity?.details(a);
+      const backgroundHint = a.background ? `Фоновая сессия · ${a.machine ?? "Этот компьютер"}` : null;
       if (collapsed) {
-        const meta = this.activity?.details(a);
         const ready = a.status === "done", needsYou = a.status === "blocked";
         const attention = ready || needsYou;
         const signal = needsYou ? t.blocked : t.done;
@@ -127,16 +137,15 @@ export default class Agents extends View {
           `${a.program?.name || "Agent"} · ${a.status}`,
           ready ? "Готово — откройте сессию, чтобы посмотреть результат" : needsYou ? "Нужно ваше действие — откройте сессию" : null,
           meta?.modelID ? `${meta.providerID ?? ""}/${meta.modelID}${meta.variant ? ` · ${meta.variant}` : ""}` : null,
-          a.address, this.activity?.notice(a)].filter(Boolean).join("\n");
+          backgroundHint ?? a.address, this.activity?.notice(a)].filter(Boolean).join("\n");
         return h_flex()
           .id(`ag-${a.address}`)
           .h(36)
           .flex_none()
           .items_center()
           .justify_center()
-          .cursor_pointer()
           .tooltip(description)
-          .on_click(() => focusAgent(a))
+          .when(!a.background, el => el.cursor_pointer().on_click(() => focusAgent(a)))
           .child(h_flex().relative().size(32).flex_none().rounded(7).items_center().justify_center()
             .when(a.focused && !attention, el => el.bg(t.selected).border(1).border_color(t.accent))
             .when(attention, el => el.bg(signal + "26").border(2).border_color(signal))
@@ -169,8 +178,7 @@ export default class Agents extends View {
         .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
       const name = label(a);
       const activity = this.activity?.get(a);
-      const meta = this.activity?.details(a);
-      const notice = this.activity?.notice(a);
+      const notice = backgroundHint ?? this.activity?.notice(a);
       return v_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -180,21 +188,20 @@ export default class Agents extends View {
         .rounded(8)
         .gap(4)
         .when(a.focused, (el) => el.bg(t.selected))
-        .cursor_pointer()
-        .hover((s) => s.bg(t.hover))
-        .on_hover((on, cx) => {
-          if (on) this.hovered = a.address;
-          else if (this.hovered === a.address) this.hovered = null;
-          cx.notify();
-        })
-        .on_click(() => focusAgent(a))
+        .when(!a.background, el => el.cursor_pointer().hover(s => s.bg(t.hover))
+          .on_hover((on, cx) => {
+            if (on) this.hovered = a.address;
+            else if (this.hovered === a.address) this.hovered = null;
+            cx.notify();
+          })
+          .on_click(() => focusAgent(a)))
         .child(h_flex().h(18).min_w(0).gap(7).items_center()
            .child(pic)
           .child(div().h(18).line_height("18px").flex_1().min_w(0).truncate().text_color(idle ? t.muted : t.foreground)
             .tooltip(notice ? `${name}\n${notice}` : name).child(name))
           .when(this.hovered === a.address, el => el.child(pin.bg(t.raised)))
           .child(statusIndicator(t, a.status)))
-        .child(sessionDetails(t, meta, activity, this.clock.value(a.address), a.address));
+        .child(sessionDetails(t, meta, activity, this.clock.value(a.address), a.address, a.background));
     };
 
     return v_flex()
@@ -206,9 +213,9 @@ export default class Agents extends View {
       .text_size(13)
       .child(v_flex().id("ag-list").flex_1().min_h(0).pt(6).px(collapsed ? 0 : 8).overflow_y_scrollbar()
         .when(!collapsed, el => el.mode("always"))
-        .when(list.length === 0 && !collapsed, el =>
+        .when(list.length === 0 && background.length === 0 && !collapsed, el =>
           el.child(div().px(4).text_size(12).text_color(t.muted).child("Нет сессий со статусом.")))
-        .children(list.map(row)))
+        .children([...list, ...background].map(row)))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

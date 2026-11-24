@@ -1,4 +1,4 @@
-import { agents, terminals, panes, spaces, exec, readTextFile, appHome } from "herdr";
+import { agents, terminals, panes, spaces, machines, exec, readTextFile, appHome } from "herdr";
 
 const cleanTitle = title => (title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
 
@@ -11,6 +11,8 @@ export class ActivityMonitor {
     this.requests = new Map();
     this.inFlight = new Map();
     this.targetKeys = new Map();
+    this.desiredKeys = new Map();
+    this.background = new Map();
     this.signature = "";
     this.bridgeKeys = new Map();
     this.bridgeStates = new Map();
@@ -26,25 +28,28 @@ export class ActivityMonitor {
     const sp = new Map(spaces().map(s => [s.id, s]));
     const ps = new Map(panes().map(p => [p.pane, p]));
     const ts = new Map(terminals().map(t => [t.address, t]));
-    const groups = new Map();
+    // Discovery must work even on a ready machine with no Herdr terminals.
+    const groups = new Map(machines().filter(m => m.layout === "ready").map(m => [m.name ?? null, []]));
     const list = agents().filter(a => !ts.get(a.address)?.parent
       && (a.app === "opencode" || a.program?.key === "opencode"));
     this.prune(new Set(list.map(a => a.address)));
     for (const a of list) {
       const machine = sp.get(a.space)?.machine ?? null;
+      if (!groups.has(machine)) continue;
       const records = ts.get(a.address)?.records ?? {};
       const previous = this.good[a.address];
-      const hints = Object.entries(records).filter(([id, r]) => id.startsWith("ses") && r.title === cleanTitle(a.title)).map(([id]) => id);
+      const recordHints = Object.entries(records).filter(([id, r]) => id.startsWith("ses") && r.title === cleanTitle(a.title)).map(([id]) => id).sort();
+      const hints = [...recordHints];
       if (previous?.title === a.title && previous.sessionID) hints.push(previous.sessionID);
       const target = {
         address: a.address,
         title: a.title,
         cwd: ps.get(a.pane)?.cwd,
         hints: [...new Set(hints)],
+        recordHints,
         durationState: previous?.title === a.title ? previous.meta?.durationState : undefined,
         metricsCache: previous?.title === a.title ? previous.meta?.metricsCache : undefined,
       };
-      if (!groups.has(machine)) groups.set(machine, []);
       groups.get(machine).push(target);
     }
     // A changed target set must not wait for the old 18s SSE lease. Retire its
@@ -56,9 +61,17 @@ export class ActivityMonitor {
       this.targetKeys.delete(machine);
       this.bridgeKeys.delete(machine);
       this.bridgeStates.delete(machine);
+      this.reconnectTimers.get(machine)?.cancel();
+      this.reconnectTimers.delete(machine);
+    }
+    this.desiredKeys = new Map([...groups].map(([machine, targets]) => [machine,
+      JSON.stringify(targets.map(({ address, title, cwd, recordHints }) => [address, title, cwd, recordHints]))]));
+    for (const machine of this.background.keys()) if (!groups.has(machine)) {
+      this.background.delete(machine);
+      cx.notify();
     }
     for (const [machine, targets] of groups) {
-      const signature = JSON.stringify(targets.map(({ address, title, cwd }) => [address, title, cwd]));
+      const signature = this.desiredKeys.get(machine);
       const changed = signature !== this.targetKeys.get(machine);
       if (this.busy.has(machine) && this.requests.get(machine)?.signature === signature) continue;
       if ((this.inFlight.get(machine) ?? 0) >= 2) continue;
@@ -80,6 +93,8 @@ export class ActivityMonitor {
         this.failures.delete(machine);
       }
       const request = { signature };
+      const current = () => !this.closed && this.requests.get(machine) === request
+        && this.desiredKeys.get(machine) === signature;
       this.startedAt.set(machine, Date.now());
       this.requests.set(machine, request);
       this.busy.add(machine);
@@ -87,6 +102,7 @@ export class ActivityMonitor {
       cx.spawn(async cx => {
         const next = {};
         let connected = false;
+        let background = [];
         try {
           this.scriptPromise ??= readTextFile(`${appHome()}/mods/trin-agents/activity.py`).catch(() => null);
           const script = await this.scriptPromise;
@@ -105,12 +121,13 @@ export class ActivityMonitor {
           const code = `import types,sys\nm=types.ModuleType("trin_activity")\nsys.modules[m.__name__]=m\nexec(${JSON.stringify(script)},m.__dict__)\n` + bridge;
           const args = [JSON.stringify(targets), JSON.stringify(this.bridgeKeys.get(machine) ?? null),
             JSON.stringify(this.bridgeStates.get(machine) ?? {})];
-          const result = await exec("python3", ["-c", code, ...args], { on: machine });
+          const result = await exec("python3", ["-c", code, ...args], { on: machine, timeout: 27000 });
           if (result.code !== 0) throw new Error("Task reader failed");
           const payload = JSON.parse(result.stdout);
           const response = payload.snapshot;
           connected = payload.connected === true;
-          if (!this.closed && this.requests.get(machine) === request) {
+          background = payload.background ?? [];
+          if (current()) {
             this.bridgeKeys.set(machine, payload.key);
             if (connected && payload.state) this.bridgeStates.set(machine, payload.state);
             else this.bridgeStates.delete(machine);
@@ -119,18 +136,21 @@ export class ActivityMonitor {
           for (const target of targets) next[target.address] = response[target.address]
             ?? { title: target.title, error: "Task reader returned no session data" };
         } catch {
-          if (!this.closed && this.requests.get(machine) === request) this.bridgeStates.delete(machine);
+          if (current()) this.bridgeStates.delete(machine);
           for (const target of targets) next[target.address] = { title: target.title, error: "OpenCode task API is unavailable" };
         } finally {
           this.inFlight.set(machine, this.inFlight.get(machine) - 1);
           if (this.requests.get(machine) === request) this.busy.delete(machine);
         }
         if (this.closed) return;
-        if (this.requests.get(machine) !== request) {
+        if (!current()) {
           this.refresh(cx);
           return;
         }
-        if (this.accept(next)) cx.notify();
+        const changedBackground = JSON.stringify(this.background.get(machine) ?? []) !== JSON.stringify(background);
+        if (background.length) this.background.set(machine, background);
+        else this.background.delete(machine);
+        if (this.accept(next) || changedBackground) cx.notify();
         if (connected) {
           this.failures.delete(machine);
           this.retryAt.delete(machine);
@@ -152,12 +172,34 @@ export class ActivityMonitor {
     for (const timer of this.reconnectTimers.values()) timer.cancel();
     this.reconnectTimers.clear();
     this.bridgeStates.clear();
+    this.background.clear();
     // In-flight bounded exec/subscriptions expire themselves within 27s;
     // closed prevents publication or reconnect, including after hot reload.
   }
 
   stale(info, good) {
     return Boolean(info.error) || Date.now() - good.checkedAt > (good.eventBridge ? 45000 : 20000);
+  }
+
+  session(agent) {
+    const info = this.results[agent.address];
+    const known = info?.sessionID ? info : this.good[agent.address];
+    return known?.title === agent.title ? known : null;
+  }
+
+  backgroundRows(attached) {
+    const claimed = new Map();
+    for (const { agent, machine } of attached) {
+      const sessionID = this.session(agent)?.sessionID;
+      if (!sessionID) continue;
+      if (!claimed.has(machine)) claimed.set(machine, new Set());
+      claimed.get(machine).add(sessionID);
+    }
+    return [...this.background].flatMap(([machine, sessions]) =>
+      sessions.filter(s => !claimed.get(machine)?.has(s.sessionID)).map(s => ({
+        ...s, machine, address: `opencode-session:${encodeURIComponent(machine ?? "")}/${s.sessionID}`,
+        program: { name: "OpenCode" }, status: "working", background: true,
+      })));
   }
 
   get(agent) {

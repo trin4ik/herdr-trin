@@ -18,11 +18,11 @@ import sys
 import time
 import urllib.parse
 
-from trin_activity import API, Unavailable, collect
+from trin_activity import API, Unavailable, collect_panel
 
 
 EVENTS = {
-    "session.created", "session.deleted", "session.forked", "session.renamed",
+    "session.created", "session.deleted", "session.forked", "session.renamed", "session.archived", "session.unarchived",
     "session.model.selected", "session.agent.selected", "session.metadata.updated",
     "session.moved", "session.status", "session.idle",
     "session.execution.started", "session.execution.succeeded",
@@ -33,6 +33,12 @@ EVENTS = {
     "session.shell.started", "session.shell.ended",
     "shell.created", "shell.exited", "shell.deleted", "location.shutdown",
     "model.updated", "provider.updated", "config.updated", "models-dev.refreshed",
+}
+DISCOVERY_EVENTS = {
+    "session.execution.started", "session.execution.succeeded", "session.execution.failed",
+    "session.execution.interrupted", "session.status", "session.idle", "session.deleted",
+    "session.archived", "session.unarchived", "session.renamed", "session.moved",
+    "session.model.selected", "location.shutdown",
 }
 
 
@@ -69,7 +75,7 @@ class SSE:
         return events
 
 
-def fingerprint(snapshot):
+def fingerprint(snapshot, background=()):
     """Clock advancement alone is NOT a data change (avoids a busy loop)."""
     stable = copy.deepcopy(snapshot)
     for info in stable.values():
@@ -78,7 +84,7 @@ def fingerprint(snapshot):
         meta.pop("durationAt", None)
         if meta.get("durationRunning"):
             meta.pop("durationMs", None)
-    return hashlib.sha256(json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([stable, background], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @contextmanager
@@ -88,6 +94,8 @@ def subscribe(api):
     connection = cls(url.hostname, url.port, timeout=2)
     try:
         path = url.path.rstrip("/") + "/api/event"
+        if types := getattr(api, "event_types", None):
+            path += "?" + urllib.parse.urlencode({"types": sorted(types)}, doseq=True)
         connection.request("GET", path, headers={**api.headers, "Accept": "text/event-stream"})
         sock = connection.sock
         response = connection.getresponse()
@@ -98,7 +106,7 @@ def subscribe(api):
         connection.close()
 
 
-def packet(snapshot, key, connected, reason, now=None):
+def packet(snapshot, key, connected, reason, now=None, *, background=None):
     """Send a duration, not a remote wall clock, to avoid machine clock skew."""
     now = int(time.time() * 1000) if now is None else now
     snapshot = copy.deepcopy(snapshot)
@@ -108,7 +116,8 @@ def packet(snapshot, key, connected, reason, now=None):
         if meta.get("durationRunning") and meta.get("durationMs") is not None:
             meta["durationMs"] += max(0, now - meta["durationAt"])
             meta["durationAt"] = 0  # replaced with the receiving client's clock
-    return {"snapshot": snapshot, "key": key, "connected": connected, "reason": reason}
+    return {"snapshot": snapshot, "background": background, "key": key,
+            "connected": connected, "reason": reason}
 
 
 def invalidations(events):
@@ -128,23 +137,24 @@ def follow(api, targets, previous=None, budget=24):
     started = time.monotonic()
     deadline, listen_end = started + budget, started + min(18, budget - 4)
     api.deadline = min(deadline, started + 12)
+    api.event_types = DISCOVERY_EVENTS if not targets else None
     with subscribe(api) as (response, sock):
-        snapshot = collect(api, targets)
-        key = fingerprint(snapshot)
+        snapshot, background = collect_panel(api, targets)
+        key = fingerprint(snapshot, background)
         # Initial state, reconciliation across a reconnect gap, and bounded
         # history bootstrap are delivered without waiting for another event.
         # A not-yet-identifiable session is NOT a disconnected event stream.
         # Keep listening for its creation/model/title updates; fingerprinting
         # prevents unchanged lookup errors from causing a reconnect busy loop.
         if key != previous:
-            return packet(snapshot, key, True, "reconcile")
+            return packet(snapshot, key, True, "reconcile", background=background)
         parser = SSE()
         while time.monotonic() < listen_end:
             sock.settimeout(max(0.01, listen_end - time.monotonic()))
             try:
                 chunk = response.read1(65536)
             except (TimeoutError, socket.timeout):
-                return packet(snapshot, key, True, "renew")
+                return packet(snapshot, key, True, "renew", background=background)
             if not chunk:
                 raise Unavailable()
             current_events = invalidations(parser.feed(chunk))
@@ -157,7 +167,7 @@ def follow(api, targets, previous=None, budget=24):
             # Drain the accumulated events BEFORE collecting, not one rebuild
             # per socket chunk. read1 returns buffered data without waiting.
             events = []
-            batch_end = min(time.monotonic() + 2, listen_end)
+            batch_end = min(time.monotonic() + (2 if targets else 0.2), listen_end)
             # The first chunk is also part of this batch (including shell events).
             # See below: the parsed events are retained, not raw event payloads.
             events.extend(current_events)
@@ -196,12 +206,12 @@ def follow(api, targets, previous=None, budget=24):
                         for target in targets:
                             target.pop("metricsCache", None)
             api.deadline = deadline
-            snapshot = collect(api, targets)
-            next_key = fingerprint(snapshot)
+            snapshot, background = collect_panel(api, targets)
+            next_key = fingerprint(snapshot, background)
             api.dirty_sessions = set()
             if next_key != key:
-                return packet(snapshot, next_key, True, "event")
-        return packet(snapshot, key, True, "renew")
+                return packet(snapshot, next_key, True, "event", background=background)
+        return packet(snapshot, key, True, "renew", background=background)
 
 
 def main():
@@ -226,10 +236,11 @@ def main():
             if api is None:
                 raise Unavailable()
             api.deadline = time.monotonic() + 3
-            snapshot = collect(api, targets)
+            snapshot, background = collect_panel(api, targets)
         except Exception:
             snapshot = {t["address"]: {"title": t["title"], "error": "OpenCode event bridge is unavailable"} for t in targets}
-        result = packet(snapshot, None, False, "unavailable")
+            background = None
+        result = packet(snapshot, None, False, "unavailable", background=background)
     print(json.dumps(result, ensure_ascii=False))
 
 

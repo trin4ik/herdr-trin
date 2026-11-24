@@ -20,6 +20,7 @@ class FakeAPI:
         self.sessions = {s["id"]: s for s in sessions}
         self.active = {sid: {"type": "running"} for sid in active}
         self.shells = shells or {"/project": []}
+        self.deadline = float("inf")
 
     def get(self, path, **query):
         if path == "/api/session":
@@ -81,6 +82,27 @@ class ActivityTests(unittest.TestCase):
 
     def test_main_session_is_not_a_subagent(self):
         self.assertEqual(self.result(FakeAPI([session("root")], ["root"]))["subagents"], 0)
+
+    def test_panel_discovers_only_active_main_unarchived_sessions_without_terminals(self):
+        root = session("ses_root", "Real background")
+        archived = {**session("ses_test"), "time": {"archived": 1000}}
+        child = session("ses_child", "Child", "ses_root")
+        idle = session("ses_idle", "Idle")
+        root.update(metadata={"secret": "not forwarded"}, model={"id": "model", "providerID": "provider",
+                                                                "variant": "high", "private": "not forwarded"})
+        api = FakeAPI([root, archived, child, idle], ["ses_root", "ses_test", "ses_child", "ses_missing"])
+        snapshot, background = activity.collect_panel(api, [])
+        self.assertEqual(snapshot, {})
+        self.assertEqual(background, [{"sessionID": "ses_root", "title": "Real background", "folder": "/project",
+                                      "meta": {"modelID": "model", "providerID": "provider", "variant": "high"}}])
+
+    def test_explicitly_archived_or_child_sessions_are_hidden_even_if_attached(self):
+        for item in [session("ses_child", parent="ses_root"), {**session("ses_test"), "time": {"archived": 0}}]:
+            with self.subTest(item=item["id"]):
+                snapshot, background = activity.collect_panel(FakeAPI([item], [item["id"]]), [TARGET])
+                self.assertEqual(background, [])
+                self.assertEqual(snapshot["t1"], {"title": TARGET["title"], "sessionID": item["id"],
+                                                   "excluded": True})
 
     def test_nested_children_and_their_shells(self):
         api = FakeAPI(
