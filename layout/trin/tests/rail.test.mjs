@@ -142,18 +142,22 @@ test("Agents falls back to the existing provider assets or initial for unknown f
   const context = { div: element, svg: path => element().asset(path), h_flex: element,
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "" };
   vm.runInNewContext(read("trin-agents/appearance.js") + "\nthis.details = sessionDetails;", context);
-  const quotas = read("trin-quotas/main.js");
-  for (const provider of ["openai", "anthropic", "ollama", "kimi", "opencode"]) {
+  const quotaContext = { ...context, View: class {} };
+  vm.runInNewContext(read("trin-quotas/main.js") + "\nthis.QuotasPanel = Quotas;", quotaContext);
+  const quotaPanel = new quotaContext.QuotasPanel();
+  for (const provider of ["openai", "anthropic", "ollama", "kimi", "opencode", "google"]) {
     const root = context.details({ muted: "muted" }, { providerID: provider }, null, null, "test");
     const icon = nodes(root).find(n => n.attrs.asset);
-    const path = `assets/trin-providers/${provider === "opencode" ? "opencode-logo" : provider}.svg`;
+    const path = provider === "google" ? "mods/trin-agents/model-google.svg"
+      : `assets/trin-providers/${provider === "opencode" ? "opencode-logo" : provider}.svg`;
     assert.equal(icon.attrs.asset[0], path);
     assert.equal(icon.attrs.text_color[0], "muted");
-    assert.ok(quotas.includes(provider));
+    const quotaIcon = nodes(quotaPanel.mark({ provider, name: provider }, { muted: "muted" })).find(n => n.attrs.asset);
+    assert.equal(quotaIcon?.attrs.asset[0], path, provider);
+    assert.equal(quotaIcon.attrs.text_color[0], "muted");
     if (provider === "opencode") {
       assert.equal(icon.attrs.w[0], 10); assert.equal(icon.attrs.h[0], 12.5);
-      assert.ok(quotas.includes(path));
-    } else assert.equal(icon.attrs.size[0], provider === "kimi" ? 16 : 20);
+    } else assert.equal(icon.attrs.size[0], ["kimi", "google"].includes(provider) ? 16 : 20);
   }
   const unknown = context.details({}, { providerID: "custom" }, null, null, "test");
   assert.equal(nodes(unknown).some(n => n.attrs.asset), false);
@@ -166,7 +170,6 @@ test("Agents falls back to the existing provider assets or initial for unknown f
     if (mark === "opencode") {
       assert.equal(icon.attrs.w[0], 10);
       assert.equal(icon.attrs.h[0], 12.5);
-      assert.ok(quotas.includes(path));
     } else assert.equal(icon.attrs.size[0], mark === "kimi" ? 16 : 20);
     assert.ok(byID(root, "agent-test-model").attrs.tooltip[0].startsWith(provider + "/"));
     assert.equal(nodes(root).some(n => n.childNodes.includes(provider[0].toUpperCase())), false);

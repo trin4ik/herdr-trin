@@ -87,22 +87,23 @@ export default class Quotas extends View {
 
   mark(subscription, t, size = 16) {
     const provider = subscription.provider;
+    const frame = h_flex().size(size).flex_none().items_center().justify_center();
+    if (provider === "google") {
+      // Use the same theme-tinted Google G as Agents, not a text initial.
+      return frame.child(svg("mods/trin-agents/model-google.svg").size(size).text_color(t.muted));
+    }
     if (provider === "opencode") {
       // OpenCode's own mark, not the Zen provider Z. Keep its 4:5 aspect ratio
       // and whole-pixel strokes in both the compact row and the profile header.
       const width = size >= 20 ? 16 : 12;
-      return h_flex().size(size).flex_none().items_center().justify_center()
-        .child(svg("assets/trin-providers/opencode-logo.svg").w(width).h(width * 5 / 4).text_color(t.muted));
+      return frame.child(svg("assets/trin-providers/opencode-logo.svg").w(width).h(width * 5 / 4).text_color(t.muted));
     }
     if (["openai", "anthropic", "ollama", "kimi"].includes(provider)) {
-      // Existing real asset copies also used by Agents (external mod symlinks
-      // cannot be used as SVG assets through the native asset sandbox).
-      return h_flex().size(size).flex_none().items_center().justify_center()
-        .child(svg(`assets/trin-providers/${provider}.svg`).size(size + 4).text_color(t.muted));
+      // Same installed SVGs as Agents.
+      return frame.child(svg(`assets/trin-providers/${provider}.svg`).size(size + 4).text_color(t.muted));
     }
     // Unknown providers retain an identifiable fallback.
-    return h_flex().size(size).flex_none().items_center().justify_center()
-      .text_size(12).font_semibold().text_color(t.muted)
+    return frame.text_size(12).font_semibold().text_color(t.muted)
       .child(subscription.name[0]?.toUpperCase() ?? "?");
   }
 

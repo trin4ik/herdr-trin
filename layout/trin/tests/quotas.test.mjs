@@ -37,7 +37,7 @@ const text = el => !el || typeof el !== "object" ? String(el ?? "") : el.childNo
 function fixture(width = 268, viewportHeight, colors = {}) {
   const timers = [];
   const cx = { notifications: 0, notify() { this.notifications++; }, timer: { after(ms, callback) { timers.push({ ms, callback }); } } };
-  const context = { View: class {}, div: native, svg: native, h_flex: native, v_flex: native,
+  const context = { View: class {}, div: native, svg: path => native().asset(path), h_flex: native, v_flex: native,
     Popover: { new: id => native().id(id) },
     theme: () => colors, layout: () => ({ id: "sidebar", size: { px: width } }),
     QUOTA_URL: "http://127.0.0.1:8098/v1/quotas", ...metrics };
@@ -618,7 +618,32 @@ test("the console snapshot keeps counters and a percentage-free refusal", () => 
 test("an unknown provider keeps its own name and order", () => {
   const normalized = data.normalizeSnapshot({ schema_version: 1, generated_at: consoleFixture.CONSOLE_NOW,
     subscriptions: [{ id: "x", provider: "mystery", status: "ok", quotas: [] }] });
-  assert.equal(normalized.subscriptions[0].name, "mystery");
+  const [subscription] = normalized.subscriptions;
+  assert.equal(subscription.name, "mystery");
+  const mark = fixture().panel.mark(subscription, {});
+  assert.equal(text(mark), "M");
+  assert.equal(nodes(mark).some(el => el.attrs.asset), false);
+});
+
+test("the Google subscription uses the Agents logo in wide and narrow rows and in details", () => {
+  const [subscription] = data.normalizeSnapshot({ schema_version: 1, generated_at: DEMO_NOW, subscriptions: [
+    { id: "google-test", provider: "google", status: "ok", quotas: [{ id: "gemini_5h", used_percent: 37 }] },
+  ] }).subscriptions;
+  for (const [width, rowIconSize] of [[268, 16], [44, 22]]) {
+    const muted = "#929292";
+    const { panel, cx, timers } = fixture(width, 900, { muted });
+    panel.monitor.subscriptions = [subscription];
+    panel.setOpen(subscription.id, true, cx); timers[0].callback(cx);
+    const root = panel.render(), id = subscription.id;
+    const row = byID(root, `quota-${id}`), card = byID(root, `quota-details-${id}`);
+    for (const [section, size] of [[row, rowIconSize], [card, 22]]) {
+      const icon = nodes(section).find(el => el.attrs.asset?.[0] === "mods/trin-agents/model-google.svg");
+      assert.equal(icon?.attrs.size[0], size);
+      assert.equal(icon.attrs.text_color[0], muted);
+      assert.equal(nodes(section).some(el => el.childNodes.includes("G")), false);
+    }
+    assert.equal(text(byID(row, `quota-${id}-usage`)), "37%");
+  }
 });
 
 test("the console row shows Go allowance while refusal details never invent a percentage", () => {
