@@ -94,7 +94,27 @@ class ActivityTests(unittest.TestCase):
         snapshot, background = activity.collect_panel(api, [])
         self.assertEqual(snapshot, {})
         self.assertEqual(background, [{"sessionID": "ses_root", "title": "Real background", "folder": "/project",
-                                      "meta": {"modelID": "model", "providerID": "provider", "variant": "high"}}])
+                                      "meta": {"modelID": "model", "providerID": "provider", "variant": "high",
+                                               "modelFromHistory": False}}])
+
+    def test_detached_sessions_with_no_selected_model_read_one_assistant(self):
+        calls = []
+        class DetachedAPI(FakeAPI):
+            def get(self, path, **query):
+                if path.endswith("/message"):
+                    calls.append((path, query))
+                    return {"data": [{"model": {"id": "last", "providerID": "provider"}}]}
+                return super().get(path, **query)
+        api = DetachedAPI([session("ses_root"), {**session("ses_archived"), "time": {"archived": 1}},
+                           {**session("ses_reverted"), "revert": {"messageID": "msg_fixture"}}],
+                          ["ses_root", "ses_archived", "ses_reverted"])
+        _, rows = activity.collect_panel(api, [])
+        by_id = {row["sessionID"]: row["meta"] for row in rows}
+        self.assertEqual(by_id["ses_root"]["modelID"], "last")
+        self.assertTrue(by_id["ses_root"]["modelFromHistory"])
+        self.assertIsNone(by_id["ses_reverted"]["modelID"])
+        self.assertNotIn("ses_archived", by_id)
+        self.assertEqual(calls, [("/api/session/ses_root/message", {"type": "assistant", "limit": "1", "order": "desc"})])
 
     def test_explicitly_archived_or_child_sessions_are_hidden_even_if_attached(self):
         for item in [session("ses_child", parent="ses_root"), {**session("ses_test"), "time": {"archived": 0}}]:
@@ -387,7 +407,46 @@ class SessionMetricsTests(unittest.TestCase):
         self.assertEqual(info["contextLimit"], 1000000)
         self.assertEqual(info["contextTokens"], 167000)
         self.assertEqual(info["contextModelID"], "old")
+        self.assertEqual(info["modelID"], "new")
+        self.assertFalse(info["modelFromHistory"])
         self.assertEqual(api.query, {"location[directory]": "/project"})
+
+    def test_missing_selected_model_uses_latest_assistant_not_the_older_context_model(self):
+        usage = {"input": 15, "output": 3, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+        class MetricsAPI:
+            def get(self, path, **query):
+                if path == "/api/model":
+                    return {"data": []}
+                if path.endswith("/message"):
+                    old = {**step(1, 100, 200), "model": {"id": "older", "providerID": "other"}, "tokens": usage}
+                    new = {**step(2, 300), "model": {"id": "latest", "providerID": "provider", "variant": "medium",
+                                                   "discard": "unused config"}}
+                    return {"data": [old, new] if query.get("type") == "assistant" else [new, old]}
+                raise activity.Unavailable()
+        api, s = MetricsAPI(), session("root")
+        info = activity.session_metrics(api, s, TARGET, True)
+        self.assertEqual((info["modelID"], info["providerID"], info["variant"]), ("latest", "provider", "medium"))
+        self.assertTrue(info["modelFromHistory"])
+        self.assertEqual(info["contextModelID"], "older")
+        self.assertEqual(info["contextTokens"], 18)
+        again = activity.session_metrics(api, s, {**TARGET, "metricsCache": info["metricsCache"]}, True)
+        self.assertEqual(again["modelID"], "latest")
+        self.assertNotIn("unused config", json.dumps(info))
+
+    def test_compaction_hides_context_but_not_last_used_model(self):
+        old = {**step(1, 100, 200), "model": {"id": "last", "providerID": "provider"}}
+
+        class MetricsAPI:
+            def get(self, path, **query):
+                if query.get("type") == "assistant":
+                    return {"data": [old]}
+                return {"data": [{"id": "msg_000002", "type": "compaction", "status": "completed"}, old]}
+
+        info = activity.session_metrics(MetricsAPI(), session("root"), TARGET, False)
+        self.assertEqual(info["modelID"], "last")
+        self.assertTrue(info["modelFromHistory"])
+        self.assertIsNone(info["contextTokens"])
+        self.assertIsNone(info["contextModelID"])
 
     def test_new_session_shows_selected_model_and_effort_before_first_assistant_message(self):
         class EmptyAPI:

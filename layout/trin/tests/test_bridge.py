@@ -142,6 +142,15 @@ class FollowTests(unittest.TestCase):
                 self.assertEqual(order, ["subscribe", "snapshot", "read", "snapshot", "close"])
                 self.assertNotIn("session.text.delta", self.api.event_types)
 
+    def test_background_model_updates_on_first_step_without_another_lifecycle_event(self):
+        first = [{"sessionID": "ses_job", "meta": {"modelID": None}}]
+        changed = [{"sessionID": "ses_job", "meta": {"modelID": "last", "modelFromHistory": True}}]
+        event = b'data: {"type":"session.step.started","data":{"sessionID":"ses_job"}}\n\n'
+        result, _ = self.run_follow([{}, {}], [event], bridge.fingerprint({}, first), backgrounds=[first, changed])
+        self.assertIn("session.step.started", self.api.event_types)
+        self.assertEqual(result["reason"], "event")
+        self.assertEqual(result["background"], changed)
+
     def test_text_deltas_and_connect_notification_do_not_query(self):
         first = snapshot()
         events = [b'data: {"type":"session.text.delta"}\n\n', b'data: {"type":"server.connected"}\n\n']

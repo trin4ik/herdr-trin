@@ -6,7 +6,7 @@ import { agents, terminals, spaces, machines, exec, notify, run, theme, shared, 
 import { ActivityMonitor, isOpenCode, sessionAddress, terminalSessionID } from "./activity.js";
 import { BackgroundAdmission } from "./background.js";
 import { WorkingClock } from "./metrics.js";
-import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
+import { modelDescription, spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
 import { parseOrder, orderedSessions, moveSession } from "./order.js";
 
 const ORDER_KEY = "sessions.order";
@@ -322,7 +322,7 @@ export default class Agents extends View {
         const description = [label(a), spaceOf(a).name || a.space_name,
           `${a.program?.name || "Agent"} · ${a.status}`,
           ready ? "Готово — откройте сессию, чтобы посмотреть результат" : needsYou ? "Нужно ваше действие — откройте сессию" : null,
-          meta?.modelID ? `${meta.providerID ?? ""}/${meta.modelID}${meta.variant ? ` · ${meta.variant}` : ""}` : null,
+           modelDescription(meta),
           backgroundHint ?? a.address, this.activity?.notice(a, sid)].filter(Boolean).join("\n");
         return h_flex()
           .id(`ag-${a.address}`)
@@ -384,10 +384,10 @@ export default class Agents extends View {
         .on_hover((over, cx) => { if (!over) this.cancelDrag(cx); })
         .when(this.rows.length === 0 && !collapsed, el =>
           el.child(div().px(4).text_size(12).text_color(t.muted).child(hidden.length ? "Нет открытых сессий." : "Нет сессий со статусом.")))
-        .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent)))
-        .when(hidden.length > 0, el => el.child(v_flex().id("hidden-sessions").flex_none()
+        .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent))))
+      .child(v_flex().id("hidden-sessions").flex_none().min_h(0).max_h(this.hiddenOpen ? "45%" : 30).px(collapsed ? 0 : 8)
           .child(h_flex().id("hidden-sessions-toggle").h(30).px(collapsed ? 2 : 6).gap(4).items_center()
-            .when(collapsed, h => h.justify_center()).border_t(1).border_color(t.border)
+            .flex_none().when(collapsed, h => h.justify_center()).border_t(1).border_color(t.border)
             .text_color(t.muted).text_size(11).cursor_pointer().hover(h => h.bg(t.hover))
             .tooltip(`Скрытые сессии: ${hidden.length}`).accessibility_label(`Скрытые сессии: ${hidden.length}`)
             .on_click((_e, cx) => {
@@ -397,10 +397,12 @@ export default class Agents extends View {
             })
             .child(svg(`mods/workspace-chrome/chevron-${this.hiddenOpen ? "down" : "right"}.svg`).size(11).flex_none())
             .when(!collapsed, h => h.child(div().flex_1().truncate().child("Скрытые")))
-            .child(div().child(String(hidden.length))))
-          .when(Boolean(this.hiddenOpen), el => el.children(hidden.map(({ agent }) => row(agent)
-            .cursor_pointer().accessibility_label(`Вернуть: ${label(agent)}`)
-            .on_click((_e, cx) => focusAgent(agent, cx))))))))
+            .child(div().text_color(t.muted).child(String(hidden.length))))
+          .when(Boolean(this.hiddenOpen), el => el.child(v_flex().id("hidden-sessions-list").min_h(0).overflow_y_scrollbar()
+            .when(hidden.length === 0, list => list.child(div().px(6).py(6).text_size(11).text_color(t.muted)
+              .when(collapsed, item => item.tooltip("Нет скрытых сессий")).child(collapsed ? "—" : "Нет скрытых сессий.")))
+            .children(hidden.map(({ agent }) => row(agent).cursor_pointer()
+              .accessibility_label(`Вернуть: ${label(agent)}`).on_click((_e, cx) => focusAgent(agent, cx)))))))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

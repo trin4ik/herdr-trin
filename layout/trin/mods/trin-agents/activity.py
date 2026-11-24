@@ -156,8 +156,29 @@ def scan_duration(api, session_id, previous=None, running=False, now=None):
     }
 
 
-def context_message(api, session):
-    """Match OpenCode's lastAssistantWithUsage, without downloading all history."""
+def read_model(value):
+    if not isinstance(value, dict) or not isinstance(value.get("id"), str) or not value["id"].strip():
+        return None
+    return {key: value[key] for key in ("id", "providerID", "variant") if isinstance(value.get(key), str)}
+
+
+def listed_model(model, remembered=None):
+    display = model or remembered or {}
+    return {"modelID": display.get("id"), "providerID": display.get("providerID"),
+            "variant": display.get("variant"), "modelFromHistory": not model and bool(remembered)}
+
+
+def last_assistant_model(api, session_id):
+    path = "/api/session/" + urllib.parse.quote(session_id, safe="") + "/message"
+    try:
+        steps = api.get(path, type="assistant", limit="1", order="desc")["data"]
+        return read_model(steps[0].get("model")) if steps else None
+    except Exception:
+        return None
+
+
+def context_message(api, session, latest_model=None):
+    """Find context usage and remember the nearest assistant model in the same read."""
     path = "/api/session/" + urllib.parse.quote(session["id"], safe="") + "/message"
     boundary = (session.get("revert") or {}).get("messageID")
     before_boundary = not boundary
@@ -179,8 +200,11 @@ def context_message(api, session):
                 continue
             if message.get("type") == "compaction" and message.get("status") == "completed":
                 return None
-            if message.get("type") == "assistant" and message.get("tokens") is not None:
-                return message
+            if message.get("type") == "assistant":
+                if latest_model is not None and not latest_model:
+                    latest_model.update(read_model(message.get("model")) or {})
+                if message.get("tokens") is not None:
+                    return message
         if len(page["data"]) < 4:
             return None
         cursor = (page.get("cursor") or {}).get("next")
@@ -205,9 +229,9 @@ def context_limit(api, session, model, cache):
 
 
 def session_metrics(api, session, target, running, model_cache=None):
-    model = session.get("model") or {}
-    result = {"modelID": model.get("id"), "providerID": model.get("providerID"),
-              "variant": model.get("variant"), "totalTokens": token_total(session.get("tokens"))}
+    model = read_model(session.get("model")) or {}
+    latest_model = {}
+    result = {"totalTokens": token_total(session.get("tokens"))}
     # Validated scalar buckets only: no prompts or message content cross the
     # bridge. Keep cache reads/writes and reasoning separate so sums reconcile.
     if result["totalTokens"] is not None:
@@ -219,19 +243,25 @@ def session_metrics(api, session, target, running, model_cache=None):
         session.get("revert"), model, running], sort_keys=True).encode()).hexdigest()
     cached = target.get("metricsCache") or {}
     reusable = (cached.get("sessionID") == session["id"] and cached.get("version") == version
-                and 0 <= time.time() - cached.get("at", 0) < 30
+                 and (model or "latestModel" in cached)
+                 and 0 <= time.time() - cached.get("at", 0) < 30
                 and session["id"] not in getattr(api, "dirty_sessions", set()))
     try:
         if reusable and "contextTokens" in cached:
             result["contextTokens"] = cached["contextTokens"]
-            context_model = cached.get("contextModel") or model
+            context_model = read_model(cached.get("contextModel")) or model
+            latest_model.update(read_model(cached.get("latestModel")) or {})
         else:
-            message = context_message(api, session)
+            message = context_message(api, session, None if model else latest_model)
             result["contextTokens"] = token_total(message["tokens"]) if message else None
             if message:
-                context_model = message.get("model") or model
+                context_model = read_model(message.get("model")) or model
+            elif not model and not latest_model and not session.get("revert"):
+                # Compaction resets context usage, not the last used model.
+                latest_model.update(last_assistant_model(api, session["id"]) or {})
     except Exception:
         result["contextError"] = "Current context usage is temporarily unavailable"
+    result.update(listed_model(model, latest_model))
     result["contextModelID"] = context_model.get("id")
     result["contextProviderID"] = context_model.get("providerID")
     result["contextLimit"] = context_limit(api, session, context_model, model_cache if model_cache is not None else {})
@@ -251,7 +281,7 @@ def session_metrics(api, session, target, running, model_cache=None):
         result["metricsCache"] = {"sessionID": session["id"], "version": version,
             "at": cached["at"] if reusable else time.time(),
             "contextTokens": result.get("contextTokens"),
-            "contextModel": {key: context_model.get(key) for key in ("id", "providerID")}}
+            "contextModel": context_model, "latestModel": latest_model}
     return result
 
 
@@ -344,12 +374,10 @@ def collect_panel(api, targets):
                     cache[sid] = item
                     if hidden_session(item):
                         continue
-                    model = item.get("model") or {}
                     background.append({
                         "sessionID": sid, "title": item.get("title") or "OpenCode",
                         "folder": (item.get("location") or {}).get("directory"),
-                        "meta": {"modelID": model.get("id"), "providerID": model.get("providerID"),
-                                 "variant": model.get("variant")},
+                        "meta": listed_model(read_model(item.get("model"))),
                     })
         finally:
             api.deadline = deadline
@@ -362,6 +390,29 @@ def collect_panel(api, targets):
                 info = snapshot.setdefault(target["address"], {"title": target["title"]})
                 if not info.get("excluded") and "meta" not in info:
                     info["error"] = "Session metrics are temporarily unavailable"
+    # Reuse attached metadata when available. Detached rows otherwise take one
+    # bounded read for the latest assistant, never a scan of the transcript.
+    attached = {info["sessionID"]: info["meta"] for info in snapshot.values() if "meta" in info}
+    unresolved = []
+    for row in background:
+        if not row["meta"]["modelID"]:
+            known = attached.get(row["sessionID"])
+            if known and known.get("modelID"):
+                row["meta"] = {key: known.get(key) for key in ("modelID", "providerID", "variant", "modelFromHistory")}
+            elif not known and not cache[row["sessionID"]].get("revert"):
+                unresolved.append(row)
+    if unresolved:
+        deadline = api.deadline
+        api.deadline = min(deadline, time.monotonic() + 1)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                models = pool.map(lambda row: last_assistant_model(api, row["sessionID"]), unresolved)
+                for row, model in zip(unresolved, models):
+                    if model:
+                        row["meta"] = listed_model(None, model)
+        finally:
+            api.deadline = deadline
     return snapshot, background
 
 

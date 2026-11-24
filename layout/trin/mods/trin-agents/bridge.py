@@ -38,7 +38,7 @@ DISCOVERY_EVENTS = {
     "session.execution.started", "session.execution.succeeded", "session.execution.failed",
     "session.execution.interrupted", "session.status", "session.idle", "session.deleted",
     "session.archived", "session.unarchived", "session.renamed", "session.moved",
-    "session.model.selected", "location.shutdown",
+    "session.model.selected", "session.step.started", "location.shutdown",
 }
 
 

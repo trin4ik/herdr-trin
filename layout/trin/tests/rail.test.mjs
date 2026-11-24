@@ -216,7 +216,34 @@ test("working hidden tabs live below the folded section and return to the main l
   job.status = "done";
   root = panel.render();
   assert.ok(byID(root, "ag-t0"));
-  assert.equal(byID(root, "hidden-sessions"), undefined);
+  assert.match(byID(root, "hidden-sessions-toggle").attrs.tooltip[0], /: 0$/);
+  assert.equal(byID(byID(root, "hidden-sessions"), "ag-t0"), undefined);
+});
+
+test("the empty Hidden toggle remains outside the scrolling main list in either sidebar width", () => {
+  const { panel, context } = fixture();
+  for (const width of [44, 268]) {
+    panel.hiddenOpen = false;
+    context.layout = () => ({ id: "sidebar", size: { px: width } });
+    const root = panel.render();
+    assert.equal(byID(byID(root, "ag-list"), "hidden-sessions-toggle"), undefined);
+    const toggle = byID(root, "hidden-sessions-toggle");
+    assert.match(toggle.attrs.tooltip[0], /: 0$/);
+    toggle.handlers.on_click({}, cx);
+    const list = byID(panel.render(), "hidden-sessions-list");
+    assert.ok(list);
+    if (width === 268) assert.equal(text(list), "Нет скрытых сессий.");
+  }
+});
+
+test("the Details tooltip distinguishes history model from the selected model", () => {
+  const { panel, context } = fixture();
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  panel.activity.details = () => ({ providerID: "opencode-go", modelID: "example-free", modelFromHistory: true });
+  const expected = /opencode-go\/example-free\nМодель последнего шага/;
+  assert.match(byID(panel.render(), "agent-t0-model").attrs.tooltip[0], expected);
+  context.layout = () => ({ id: "sidebar", size: { px: 44 } });
+  assert.match(byID(panel.render(), "ag-t0").attrs.tooltip[0], expected);
 });
 const sessionRows = panel => Array.from(byID(panel.render(), "ag-list").childNodes, row => row.attrs.id[0].slice(3));
 

@@ -74,11 +74,17 @@ function activityBadges(t, info, address) {
     .when(info.shells > 0, el => el.child(badge("shells", info.shells, shellsTooltip(info))));
 }
 
+export function modelDescription(meta) {
+  if (!meta?.modelID) return null;
+  return `${meta.providerID ?? "?"}/${meta.modelID}${meta.variant ? ` · ${meta.variant}` : ""}`
+    + (meta.modelFromHistory ? "\nМодель последнего шага OpenCode; модель сессии не задана" : "");
+}
+
 export function sessionDetails(t, meta, activity, elapsed, address, background = false) {
   const provider = meta?.providerID;
   const model = meta?.modelID;
   const mark = modelMark(model) ?? (Object.hasOwn(PROVIDER_MARKS, provider) ? PROVIDER_MARKS[provider] : null);
-  const modelTitle = model ? `${provider ?? "?"}/${model}${meta.variant ? ` · ${meta.variant}` : ""}` : "Model data unavailable";
+  const modelTitle = modelDescription(meta) ?? "Model data unavailable";
   const timingTitle = "Accumulated session work time; runs continuously while status is Working"
     + (!meta?.durationReady ? "\nHistorical assistant-step total is still loading; showing locally observed work" : "");
   return h_flex().h(LINE_HEIGHT).min_w(0).gap(6).items_center().text_size(12).text_color(t.muted)
