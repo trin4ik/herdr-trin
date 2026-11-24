@@ -14,6 +14,11 @@ const TITLES_KEY = "trin.sessions.titles";
 const DRAG_THRESHOLD = 4;
 const COMPLETION_BLUE = "#3b82f6";
 const ATTENTION = { blocked: 3, done: 2, working: 1 };
+const WIDE_ROW_HEIGHT = 52;
+const RAIL_ROW_HEIGHT = 36;
+const HIDDEN_HEADER_HEIGHT = 30;
+const HIDDEN_VISIBLE_ROWS = 3;
+const HIDDEN_ROW_BOTTOM_PADDING = 5;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -307,9 +312,10 @@ export default class Agents extends View {
       || (this.drag.over && !rows.some(row => row.id === this.drag.over)))) this.drag = null;
     if (this.live !== false) setAgentOrder(this.rows.filter(row => !row.agent.background).map(row => row.agent.address));
 
-    const label = (a) => sessionName(tabs.get(a.tab), a, titles[a.address]?.title);
+  const label = (a) => sessionName(tabs.get(a.tab), a, titles[a.address]?.title);
 
-    const row = (a) => {
+    const rowHeight = collapsed ? RAIL_ROW_HEIGHT : WIDE_ROW_HEIGHT;
+    const row = (a, bottomPadding = 0) => {
       const pic = spaceAvatar(spaceOf(a), t);
       const sid = sessionIDs.get(a.address);
       const meta = a.background ? a.meta : this.activity?.details(a, sid);
@@ -326,7 +332,8 @@ export default class Agents extends View {
           backgroundHint ?? a.address, this.activity?.notice(a, sid)].filter(Boolean).join("\n");
         return h_flex()
           .id(`ag-${a.address}`)
-          .h(36)
+          .h(rowHeight + bottomPadding)
+          .when(bottomPadding > 0, el => el.pb(bottomPadding))
           .flex_none()
           .items_center()
           .justify_center()
@@ -349,8 +356,9 @@ export default class Agents extends View {
       return v_flex()
         .id(`ag-${a.address}`)
         .px(8)
-        .h(52)
-        .py(6)
+        .h(rowHeight + bottomPadding)
+        .pt(6)
+        .pb(6 + bottomPadding)
         .flex_none()
         .rounded(8)
         .gap(4)
@@ -365,6 +373,8 @@ export default class Agents extends View {
         .child(sessionDetails(t, meta, activity, this.clock.value(a.address), a.address, a.background));
     };
 
+    const hiddenHeight = HIDDEN_HEADER_HEIGHT + (this.hiddenOpen
+      ? Math.min(hidden.length, HIDDEN_VISIBLE_ROWS) * (rowHeight + HIDDEN_ROW_BOTTOM_PADDING) : 0);
     return v_flex()
       .size_full()
       .min_h(0)
@@ -385,8 +395,11 @@ export default class Agents extends View {
         .when(this.rows.length === 0 && !collapsed, el =>
           el.child(div().px(4).text_size(12).text_color(t.muted).child(hidden.length ? "Нет открытых сессий." : "Нет сессий со статусом.")))
         .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent))))
-      .when(hidden.length > 0, el => el.child(v_flex().id("hidden-sessions").w_full().flex_none().min_h(0).max_h(this.hiddenOpen ? "45%" : 30)
-          .child(h_flex().id("hidden-sessions-toggle").w_full().h(30).px(collapsed ? 2 : 14).gap(4).items_center()
+      // The scrollbar wrapper has no intrinsic height. Reserve space for
+      // its viewport explicitly, leaving room for the main sessions list.
+      .when(hidden.length > 0, el => el.child(v_flex().id("hidden-sessions").w_full().flex_none()
+          .h(hiddenHeight).min_h(HIDDEN_HEADER_HEIGHT).when(this.hiddenOpen, section => section.max_h("45%"))
+          .child(h_flex().id("hidden-sessions-toggle").w_full().h(HIDDEN_HEADER_HEIGHT).px(collapsed ? 2 : 14).gap(4).items_center()
             .flex_none().when(collapsed, h => h.justify_center()).border_t(1).border_color(t.border)
             .text_color(t.muted).text_size(11).cursor_pointer().hover(h => h.bg(t.hover))
             .tooltip(`Скрытые сессии: ${hidden.length}`).accessibility_label(`Скрытые сессии: ${hidden.length}`)
@@ -398,8 +411,9 @@ export default class Agents extends View {
             .child(svg(`mods/workspace-chrome/chevron-${this.hiddenOpen ? "down" : "right"}.svg`).size(11).flex_none())
             .when(!collapsed, h => h.child(div().flex_1().truncate().child("Скрытые")))
             .child(div().child(String(hidden.length))))
-          .when(Boolean(this.hiddenOpen), section => section.child(v_flex().id("hidden-sessions-list").min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar()
-            .children(hidden.map(({ agent }) => row(agent).cursor_pointer()
+          .when(Boolean(this.hiddenOpen), section => section.child(v_flex().id("hidden-sessions-list").flex_1().min_h(0)
+            .px(collapsed ? 0 : 8).overflow_y_scrollbar()
+            .children(hidden.map(({ agent }) => row(agent, HIDDEN_ROW_BOTTOM_PADDING).cursor_pointer()
               .accessibility_label(`Вернуть: ${label(agent)}`).on_click((_e, cx) => focusAgent(agent, cx))))))))
       .when(collapsed, (el) =>
         el.child(

@@ -238,7 +238,27 @@ test("Hidden appears below the scrolling list only when populated, with an edge-
     assert.equal(toggle.attrs.border_t[0], 1);
     assert.equal(toggle.attrs.px[0], width === 44 ? 2 : 14);
     assert.match(toggle.attrs.tooltip[0], /: 1$/);
+    assert.equal(section.attrs.h[0], 30);
+    toggle.handlers.on_click({}, cx);
+    const opened = byID(panel.render(), "hidden-sessions");
+    const list = byID(opened, "hidden-sessions-list");
+    const row = byID(list, "ag-t0");
+    assert.equal(opened.attrs.h[0], 30 + row.attrs.h[0]);
+    assert.equal(row.attrs.h[0], width === 44 ? 41 : 57);
+    assert.equal(row.attrs.pb[0], width === 44 ? 5 : 11);
+    assert.ok(list.attrs.flex_1 && list.attrs.overflow_y_scrollbar);
+    byID(opened, "hidden-sessions-toggle").handlers.on_click({}, cx);
   }
+});
+
+test("the expanded section caps its viewport without dropping any hidden row", () => {
+  const { panel, spaces } = fixture();
+  panel.hiddenOpen = true;
+  for (let n = 1; n <= 6; n++) spaces[0].tabs.push({ id: `hidden${n}`, settled: true });
+  const section = byID(panel.render(), "hidden-sessions");
+  const list = byID(section, "hidden-sessions-list");
+  assert.equal(section.attrs.h[0], 30 + 3 * 41);
+  assert.equal(list.childNodes.length, 6);
 });
 
 test("the Details tooltip distinguishes history model from the selected model", () => {
