@@ -159,6 +159,7 @@ export default class Agents extends View {
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
     const aliases = new Map(), attached = new Map(), sessionIDs = new Map(), excluded = new Set();
+    const owners = new Map();
     const unresolvedMachines = new Set();
     const titles = {};
     // `agents()` can also contain a child that was kept as a tab. Its
@@ -180,6 +181,8 @@ export default class Agents extends View {
       if (sessionID) {
         sessionIDs.set(agent.address, sessionID);
         aliases.set(agent.address, id);
+        if (!owners.has(id)) owners.set(id, new Set());
+        owners.get(id).add(agent.address);
         const title = typeof session?.sessionTitle === "string"
           ? [...session.sessionTitle.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim()].slice(0, 256).join("") : "";
         if (title) titles[agent.address] = { sessionID, title, caption: agent.title ?? "",
@@ -218,6 +221,8 @@ export default class Agents extends View {
     const now = Date.now();
     this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), now);
     const claimed = new Set([...attached.keys(), ...excluded]);
+    this.backgroundAdmission ??= new BackgroundAdmission();
+    this.backgroundAdmission.remember(owners, all);
     for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now)) {
       attached.set(agent.address, { id: agent.address, agent });
     }

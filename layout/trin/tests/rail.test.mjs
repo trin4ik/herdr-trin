@@ -301,6 +301,32 @@ test("a genuine background row waits only for same-machine working ambiguity, wi
   assert.deepEqual(sessionRows(panel).slice(-2), ids);
 });
 
+test("a previously identified session reappears after its last tab closes, despite unrelated ambiguity", () => {
+  const { panel, agents, advance } = fixture();
+  const report = { app: "opencode", state: "working", title: "Known" };
+  const owned = Object.assign(agents[0], { app: "opencode", report, records: { ses_known: report } });
+  const other = Object.assign(agents[1], { app: "opencode", status: "working" });
+  const detached = { address: "opencode-session:/ses_known", status: "working", background: true };
+  const duplicate = { address: "opencode-session:/ses_other", status: "working", background: true };
+  panel.render();
+  // An omitted idle report isn't proof the terminal went away.
+  owned.status = "idle";
+  owned.records = {};
+  panel.activity.backgroundRows = () => [detached, duplicate];
+  panel.render();
+  advance(12000);
+  assert.ok(!sessionRows(panel).includes(detached.address));
+  // Closing the tab removes its terminal, unlike losing an idle report.
+  agents.shift();
+  panel.render();
+  advance(1000);
+  assert.ok(sessionRows(panel).includes(detached.address));
+  assert.ok(!sessionRows(panel).includes(duplicate.address));
+  // A newly confirmed terminal takes precedence again.
+  Object.assign(other, { report, records: { ses_known: report } });
+  assert.ok(!sessionRows(panel).includes(detached.address));
+});
+
 test("a one-shot redraw releases genuine background rows in the narrow panel without other events", () => {
   const { panel, advance } = fixture();
   const id = "opencode-session:/ses_detached";
