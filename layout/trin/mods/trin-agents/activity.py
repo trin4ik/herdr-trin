@@ -255,7 +255,13 @@ def session_metrics(api, session, target, running, model_cache=None):
     return result
 
 
-def match_session(api, target):
+def match_session(api, target, cache=None):
+    sid = target.get("sessionID")
+    if sid:
+        item = (cache or {}).get(sid) or api.get("/api/session/" + urllib.parse.quote(sid, safe=""))["data"]
+        return item if item["id"] == sid else None
+    # Compatibility for older terminal reporters: title matching can recover
+    # statistics, but the panel never uses it to identify or merge rows.
     title = title_of(target.get("title"))
     if not title:
         return None
@@ -269,14 +275,6 @@ def match_session(api, target):
         actual = item.get("title", "")
         return actual == title or (truncated and actual.startswith(prefix))
 
-    # OSC record IDs, when present, are stronger evidence than a title search.
-    for hint in target.get("hints", []):
-        try:
-            item = api.get("/api/session/" + urllib.parse.quote(hint, safe=""))["data"]
-        except Exception:
-            continue
-        if matches(item):
-            return item
     found = []
     cursor = None
     for _ in range(5):
@@ -374,15 +372,18 @@ def collect(api, targets, *, active=None, cache=None, output=None):
     model_cache = {}
     for target in targets:
         try:
-            session = match_session(api, target)
+            session = match_session(api, target, cache)
         except Exception:
             output[target["address"]] = {"title": target["title"], "error": "Session lookup is temporarily unavailable"}
+            if target.get("sessionID"):
+                output[target["address"]]["sessionID"] = target["sessionID"]
             continue
         if session is None:
             output[target["address"]] = {"title": target["title"], "error": "Session match is missing or ambiguous"}
             continue
         cache[session["id"]] = session
-        output[target["address"]] = {"title": target["title"], "sessionID": session["id"]}
+        output[target["address"]] = {"title": target["title"], "sessionID": session["id"],
+                                     "sessionTitle": session.get("title")}
         if hidden_session(session):
             output[target["address"]]["excluded"] = True
             continue
@@ -435,9 +436,7 @@ def collect(api, targets, *, active=None, cache=None, output=None):
         owned_shells = [shell for shell in shells.values() if root in owners[shell["id"]]]
         own = sum(shell["metadata"]["sessionID"] == root for shell in owned_shells)
         children = sorted(sid for sid, chain in running.items() if sid != root and root in chain)
-        output[target["address"]] = {
-            "title": target["title"],
-            "sessionID": root,
+        output[target["address"]].update({
             "subagents": len(children),
             "subagentsDirect": sum(cache[sid].get("parentID") == root for sid in children),
             "subagentsNested": sum(cache[sid].get("parentID") != root for sid in children),
@@ -463,7 +462,7 @@ def collect(api, targets, *, active=None, cache=None, output=None):
                 for shell in owned_shells[:8]
             ],
             "meta": session_metrics(api, cache[root], target, root in running, model_cache),
-        }
+        })
     return output
 
 

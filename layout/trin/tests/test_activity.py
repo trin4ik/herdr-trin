@@ -101,7 +101,7 @@ class ActivityTests(unittest.TestCase):
             with self.subTest(item=item["id"]):
                 snapshot, background = activity.collect_panel(FakeAPI([item], [item["id"]]), [TARGET])
                 self.assertEqual(background, [])
-                self.assertEqual(snapshot["t1"], {"title": TARGET["title"], "sessionID": item["id"],
+                self.assertEqual(snapshot["t1"], {"title": TARGET["title"], "sessionID": item["id"], "sessionTitle": "Task",
                                                    "excluded": True})
 
     def test_nested_children_and_their_shells(self):
@@ -151,14 +151,16 @@ class ActivityTests(unittest.TestCase):
     def test_unique_title_survives_a_changed_location(self):
         self.assertEqual(self.result(FakeAPI([session("root", directory="/moved")]))["sessionID"], "root")
 
-    def test_valid_osc_hint_disambiguates(self):
+    def test_terminal_session_id_disambiguates(self):
         api = FakeAPI([session("one"), session("two")])
-        matched = activity.match_session(api, {**TARGET, "hints": ["two"]})
+        matched = activity.match_session(api, {**TARGET, "sessionID": "two"})
         self.assertEqual(matched["id"], "two")
 
-    def test_stale_osc_title_does_not_match(self):
+    def test_reported_id_beats_a_stale_or_colliding_title(self):
         api = FakeAPI([session("old", "Old task"), session("new")])
-        self.assertEqual(activity.match_session(api, {**TARGET, "hints": ["old"]})["id"], "new")
+        self.assertEqual(activity.match_session(api, {**TARGET, "sessionID": "old"})["id"], "old")
+        with self.assertRaises(KeyError):
+            activity.match_session(api, {**TARGET, "sessionID": "missing"})
 
     def test_ellipsized_terminal_title_matches_full_session_title(self):
         full = "Проверка Alpine-контейнеров и пароля в 256 символов"
@@ -171,7 +173,7 @@ class ActivityTests(unittest.TestCase):
         api = FakeAPI([session("one", prefix + " A"), session("two", prefix + " B")])
         target = {**TARGET, "title": "OC | " + prefix + " …"}
         self.assertIsNone(activity.match_session(api, target))
-        self.assertEqual(activity.match_session(api, {**target, "hints": ["two"]})["id"], "two")
+        self.assertEqual(activity.match_session(api, {**target, "sessionID": "two"})["id"], "two")
 
     def test_literal_ellipsis_title_wins_over_prefix_candidates(self):
         title = "Проверка Alpine-контейнеров …"

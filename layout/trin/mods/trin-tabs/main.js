@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -9,6 +9,16 @@ function find(node, id) {
     if (found) return found;
   }
   return null;
+}
+
+function verifiedTitle(terminal, value) {
+  if (!value || !terminal) return "";
+  const report = terminal.report;
+  const current = terminal.records?.[value.sessionID];
+  if (current?.app !== "opencode" || report?.app !== "opencode") return "";
+  const matches = Object.values(terminal.records).filter(r =>
+    r?.app === "opencode" && r.state === report.state && r.title === report.title);
+  return matches.length === 1 && matches[0] === current ? value.title : "";
 }
 
 export default class Tabs extends View {
@@ -111,6 +121,8 @@ export default class Tabs extends View {
     const project = projects?.projects?.find(p => p.id === projects.selected);
     const space = projects ? spaces().find(s => s.id === project?.space) : spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
+    const titles = shared("trin.sessions.titles") ?? {};
+    const live = new Map(terminals().map(terminal => [terminal.address, terminal]));
     this.widths ??= new Map();
     if (this.drag && (space?.id !== this.drag.space || shown.map(t => t.id).join("|") !== this.drag.ids.join("|"))) this.drag = null;
     for (const id of this.widths.keys()) if (!shown.some(t => t.id === id)) this.widths.delete(id);
@@ -122,7 +134,8 @@ export default class Tabs extends View {
       const pane = tabPanes.find(p => p.program?.agent) ?? tabPanes.find(p => p.focused) ?? tabPanes[0];
       const program = pane?.program;
       const title = (pane?.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
-      const name = c.named ? c.name : title || program?.name || "Terminal";
+      const name = c.named ? c.name : verifiedTitle(live.get(pane?.terminal), titles[pane?.terminal])
+        || title || program?.name || "Terminal";
       return h_flex().id(ghost ? "tab-drag-ghost" : `tab-${c.id}`).relative().h_full().min_w(110).px(14).gap(8).items_center().flex_none().text_size(13)
         .when(!ghost, el => el.left(this.offset(c.id)).transition("left", { duration: this.drag?.active ? 140 : 0, easing: "ease-out" })
           .when(Boolean(this.drag), el => el.w(this.drag.widths[this.drag.ids.indexOf(c.id)]))
@@ -184,13 +197,13 @@ export default class Tabs extends View {
           .child(h_flex().id("tab-new").h(26).px(4).gap(6).flex_none().items_center().rounded(4)
             .text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
             .tooltip(`Новая сессия · opencode --auto · ${newTabShortcut}`)
-            .on_mouse_down("left", stop).on_click(() => run("trin-projects.new-tab"))
+            .on_mouse_down("left", stop).on_click(() => run(project ? `trin-projects.new-tab--${encodeURIComponent(project.id)}` : "trin-projects.new-tab"))
             .child(svg("assets/trin-providers/opencode-logo.svg").w(8).h(10).text_color(t.muted).opacity(0.75))
             .child(div().id("tab-new-shortcut").flex_none().text_size(11).text_color(t.dim).opacity(0.65).child(newTabShortcut)))
           .child(h_flex().id("tab-terminal").h(26).px(4).gap(6).flex_none().items_center().rounded(4)
             .text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
             .tooltip(`Новый терминал · ${terminalShortcut}`)
-            .on_mouse_down("left", stop).on_click(() => run("trin-projects.new-terminal"))
+            .on_mouse_down("left", stop).on_click(() => run(project ? `trin-projects.new-terminal--${encodeURIComponent(project.id)}` : "trin-projects.new-terminal"))
             .child(svg("mods/workspace-chrome/terminal.svg").size(12).text_color(t.muted).opacity(0.75))
             .child(div().id("tab-terminal-shortcut").flex_none().text_size(11).text_color(t.dim).opacity(0.65).child(terminalShortcut)))))
       .when(Boolean(space) && enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))

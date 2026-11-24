@@ -3,14 +3,16 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
-import { ActivityMonitor, sessionAddress } from "./activity.js";
+import { ActivityMonitor, sessionAddress, terminalSessionID } from "./activity.js";
 import { WorkingClock } from "./metrics.js";
 import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
 import { parseOrder, orderedSessions, moveSession } from "./order.js";
 
 const ORDER_KEY = "sessions.order";
+const TITLES_KEY = "trin.sessions.titles";
 const DRAG_THRESHOLD = 4;
 const COMPLETION_BLUE = "#3b82f6";
+const ATTENTION = { blocked: 3, done: 2, working: 1 };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -33,9 +35,9 @@ function toggleSidebar() {
 }
 
 // Match session tabs: an explicit tab name wins, otherwise use the live title.
-function sessionName(tab, agent) {
+function sessionName(tab, agent, canonical) {
   const title = (agent.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
-  return (tab?.named ? tab.name : title || agent.program?.name)
+  return (tab?.named ? tab.name : canonical || title || agent.program?.name)
     || tab?.name || "Agent";
 }
 export default class Agents extends View {
@@ -135,15 +137,45 @@ export default class Agents extends View {
     // new target immediately rather than waiting for the 5s retry timer.
     if (cx && this.live) this.activity?.refresh(cx);
     const collapsed = narrow();
-    const all = terminals();
-    // `agents()` can also contain a child that was kept as a tab. Its
-    // parent link is independent of whether the terminal has its own pane.
-    const children = new Set(all.filter(terminal => terminal.parent).map(terminal => terminal.address));
-    const roots = agents().filter(a => !children.has(a.address) && !this.activity.session?.(a)?.excluded);
-    this.working = roots.some(a => a.status === "working");
-    if (this.live !== false) this.updateBadge(roots);
+    const all = new Map(terminals().map(terminal => [terminal.address, terminal]));
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
+    const aliases = new Map(), attached = new Map(), sessionIDs = new Map(), excluded = new Set();
+    const titles = {};
+    // `agents()` can also contain a child that was kept as a tab. Its
+    // parent link is independent of whether the terminal has its own pane.
+    for (const agent of agents()) {
+      const terminal = all.get(agent.address);
+      if (terminal?.parent) continue;
+      const sessionID = terminalSessionID(terminal);
+      const machine = spaceById.get(agent.space)?.machine ?? null;
+      const id = sessionID ? sessionAddress(machine, sessionID) : agent.address;
+      const session = this.activity.session?.(agent, sessionID);
+      if (session?.excluded) {
+        excluded.add(id);
+        continue;
+      }
+      if (sessionID) {
+        sessionIDs.set(agent.address, sessionID);
+        aliases.set(agent.address, id);
+        const title = typeof session?.sessionTitle === "string"
+          ? [...session.sessionTitle.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim()].slice(0, 256).join("") : "";
+        if (title) titles[agent.address] = { sessionID, title };
+      }
+      const previous = attached.get(id)?.agent;
+      if (!previous || (agent.focused && !previous.focused) || (agent.focused === previous.focused
+        && (ATTENTION[agent.status] ?? 0) > (ATTENTION[previous.status] ?? 0))) {
+        attached.set(id, { id, agent });
+      }
+    }
+    const titleSignature = JSON.stringify(titles);
+    if (this.live && titleSignature !== this.titleSignature) {
+      this.titleSignature = titleSignature;
+      setShared(TITLES_KEY, titles);
+    }
+    const roots = [...attached.values()].map(row => row.agent);
+    this.working = roots.some(a => a.status === "working");
+    if (this.live !== false) this.updateBadge(roots);
     const projects = shared("trin.projects.v1")?.projects ?? [];
     const spaceOf = a => {
       if (a.background) {
@@ -160,28 +192,13 @@ export default class Agents extends View {
       run("pane.focus", { pane: a.pane });
     };
     // Track work time even when the compact rail doesn't show it.
-    this.clock.sync(roots, a => this.activity.details(a), Date.now());
-    const attached = roots.map(agent => ({
-      agent, machine: spaceById.get(agent.space)?.machine ?? null,
-    }));
-    const background = this.activity.backgroundRows?.(attached) ?? [];
-    const aliases = new Map(), used = new Set();
-    const keys = new Map();
-    const rows = attached.map(({ agent, machine }) => {
-      const sid = this.activity.session?.(agent)?.sessionID;
-      // A rename briefly invalidates metadata; don't move the row until the
-      // bridge confirms that a different OpenCode session took over the pane.
-      const key = sid ? sessionAddress(machine, sid) : this.rowKeys?.get(agent.address);
-      if (key) keys.set(agent.address, key);
-      const id = key && !used.has(key) ? key : agent.address;
-      if (key === id) aliases.set(agent.address, id);
-      used.add(id);
-      return { id, agent };
-    });
-    this.rowKeys = keys;
-    for (const agent of background) {
-      if (!used.has(agent.address)) rows.push({ id: agent.address, agent });
+    this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), Date.now());
+    for (const agent of this.activity.backgroundRows?.() ?? []) {
+      if (!attached.has(agent.address) && !excluded.has(agent.address)) {
+        attached.set(agent.address, { id: agent.address, agent });
+      }
     }
+    const rows = [...attached.values()];
     this.renderOrder = [...new Set(this.order.map(id => aliases.get(id) ?? id))];
     this.rows = orderedSessions(rows, this.renderOrder);
     if (this.drag && (!rows.some(row => row.id === this.drag.id)
@@ -189,11 +206,12 @@ export default class Agents extends View {
     if (this.live !== false) setAgentOrder(this.rows.filter(row => !row.agent.background).map(row => row.agent.address));
 
     const tabs = sp.flatMap(s => s.tabs);
-    const label = (a) => sessionName(tabs.find(tab => tab.id === a.tab), a);
+    const label = (a) => sessionName(tabs.find(tab => tab.id === a.tab), a, titles[a.address]?.title);
 
     const row = (a) => {
       const pic = spaceAvatar(spaceOf(a), t);
-      const meta = a.background ? a.meta : this.activity?.details(a);
+      const sid = sessionIDs.get(a.address);
+      const meta = a.background ? a.meta : this.activity?.details(a, sid);
       const backgroundHint = a.background ? `Фоновая сессия · ${a.machine ?? "Этот компьютер"}` : null;
       const ready = a.status === "done";
       if (collapsed) {
@@ -204,7 +222,7 @@ export default class Agents extends View {
           `${a.program?.name || "Agent"} · ${a.status}`,
           ready ? "Готово — откройте сессию, чтобы посмотреть результат" : needsYou ? "Нужно ваше действие — откройте сессию" : null,
           meta?.modelID ? `${meta.providerID ?? ""}/${meta.modelID}${meta.variant ? ` · ${meta.variant}` : ""}` : null,
-          backgroundHint ?? a.address, this.activity?.notice(a)].filter(Boolean).join("\n");
+          backgroundHint ?? a.address, this.activity?.notice(a, sid)].filter(Boolean).join("\n");
         return h_flex()
           .id(`ag-${a.address}`)
           .h(36)
@@ -225,8 +243,8 @@ export default class Agents extends View {
       }
       const idle = a.status === "idle" && !a.focused;
       const name = label(a);
-      const activity = this.activity?.get(a);
-      const notice = backgroundHint ?? this.activity?.notice(a);
+      const activity = this.activity?.get(a, sid);
+      const notice = backgroundHint ?? this.activity?.notice(a, sid);
       return v_flex()
         .id(`ag-${a.address}`)
         .px(8)

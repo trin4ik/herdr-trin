@@ -5,7 +5,7 @@ import test from "node:test";
 
 const source = fs.readFileSync(new URL("../mods/trin-agents/activity.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/, "").replace(/^export /gm, "")
-  + "\nthis.Monitor = ActivityMonitor;";
+  + "\nthis.Monitor = ActivityMonitor; this.terminalSessionID = terminalSessionID;";
 const clockSource = fs.readFileSync(new URL("../mods/trin-agents/metrics.js", import.meta.url), "utf8");
 const { WorkingClock } = await import(`data:text/javascript,${encodeURIComponent(clockSource)}`);
 
@@ -13,7 +13,7 @@ function fixture(extra = {}) {
   let now = 1000;
   const context = { Date: { now: () => now }, machines: () => [{ name: null, layout: "ready" }], ...extra };
   vm.runInNewContext(source, context);
-  return { monitor: new context.Monitor(), advance: ms => now += ms };
+  return { monitor: new context.Monitor(), terminalSessionID: context.terminalSessionID, advance: ms => now += ms };
 }
 const agent = { address: "t1", title: "OC | Task" };
 const live = { title: agent.title, subagents: 0, shells: 1 };
@@ -177,10 +177,11 @@ test("a pending SSH bridge does not delay local publication or recovery", async 
 
 test("automatic session titles lose OC prefix but explicit names are preserved", () => {
   const main = fs.readFileSync(new URL("../mods/trin-agents/main.js", import.meta.url), "utf8");
-  const fn = new Function(`${main.match(/function sessionName\(tab, agent\) \{[\s\S]*?\n\}/)[0]}; return sessionName;`)();
+  const fn = new Function(`${main.match(/function sessionName\(tab, agent, canonical\) \{[\s\S]*?\n\}/)[0]}; return sessionName;`)();
   assert.equal(fn({ named: false }, { title: "OC | Реальное имя" }), "Реальное имя");
   assert.equal(fn({ named: false }, { title: "OpenCode | Name | detail" }), "Name | detail");
   assert.equal(fn({ named: true, name: "OC | My explicit name" }, { title: "OC | Other" }), "OC | My explicit name");
+  assert.equal(fn({ named: false }, { title: "OC | Other" }, "Canonical name"), "Canonical name");
 });
 
 test("session metadata remains available with zero task badges", () => {
@@ -242,6 +243,29 @@ test("Herdr child terminals with panes are not OpenCode bridge targets", async (
   assert.deepEqual(calls, [["t1"]]);
 });
 
+test("the OpenCode terminal report supplies the ID without waiting for the terminal title or bridge", async () => {
+  const report = { app: "opencode", state: "working", title: "Long current title" };
+  const terminal = { address: "t1", status: "done", report, records: {
+    ses_main: report, ses_old: { ...report, state: "idle" },
+  } };
+  const calls = [];
+  const { monitor, cx, tasks, terminalSessionID } = bridgeFixture(async (_cmd, args) => {
+    calls.push(JSON.parse(args[2]));
+    return { code: 0, stdout: JSON.stringify({ connected: false, snapshot: {
+      t1: { ...live, sessionID: "ses_main", meta: { modelID: "confirmed" } },
+    } }) };
+  }, { terminals: () => [terminal] });
+  assert.equal(terminalSessionID(terminal), "ses_main");
+  assert.equal(terminalSessionID({ ...terminal, records: { ...terminal.records, ses_same: report } }), null);
+  assert.equal(terminalSessionID({ ...terminal, report: { app: "claude" } }), null);
+  monitor.refresh(cx);
+  await tasks[0];
+  assert.equal(calls[0][0].sessionID, "ses_main");
+  const renamed = { ...agent, title: "renamed before the next bridge reply" };
+  assert.equal(monitor.details(renamed, "ses_main").modelID, "confirmed");
+  assert.equal(monitor.details(renamed, "ses_new"), null);
+});
+
 test("background sessions appear without terminal targets and disappear on completion or disconnect", async () => {
   let topology = [{ name: null, layout: "ready" }, { name: "ssh-host", layout: "ready" }];
   const item = { sessionID: "ses_same", title: "Real job", folder: "/job" };
@@ -257,10 +281,9 @@ test("background sessions appear without terminal targets and disappear on compl
   await Promise.all([...tasks]);
   assert.equal(calls, 2);
   assert.equal(monitor.backgroundRows([]).length, 2, "IDs are scoped to the machine's managed service");
-  monitor.accept({ t1: { ...live, sessionID: item.sessionID } });
-  const rows = monitor.backgroundRows([{ agent, machine: null }]);
-  assert.equal(rows.length, 1, "attached session suppresses its own background copy");
-  assert.equal(rows[0].machine, "ssh-host");
+  const rows = monitor.backgroundRows();
+  assert.equal(rows.length, 2, "the panel reconciles these against current terminal reports");
+  assert.ok(rows.some(row => row.machine === "ssh-host"));
   assert.match(rows[0].address, /^opencode-session:/);
   running = false;
   topology = [topology[0], { name: "ssh-host", layout: "unavailable" }];

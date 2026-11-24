@@ -22,7 +22,7 @@ const nodes = el => el && typeof el === "object" ? [el, ...el.childNodes.flatMap
 const text = el => el && typeof el === "object" ? el.childNodes.map(text).join("") : String(el ?? "");
 const byID = (el, id) => nodes(el).find(n => n.attrs.id?.[0] === id);
 const read = file => fs.readFileSync(new URL(`../mods/${file}`, import.meta.url), "utf8")
-  .replace(/^import .*;\n/gm, "").replaceAll("export function", "function").replace("export default class", "class");
+  .replace(/^import .*;\n/gm, "").replace("export default class", "class").replace(/^export /gm, "");
 
 const mouse = (y, local = 4, height = 52) => ({
   position: { x: 12, y }, local_position: { x: 12, y: local }, bounds: { width: 200, height },
@@ -52,9 +52,9 @@ function fixture(storage = {}) {
     localStorage: { getItem: key => storage[key] ?? null, setItem(key, value) { storage[key] = value; } },
     run: (name, args) => commands.push({ name, args }),
   };
-  vm.runInNewContext(read("trin-agents/order.js") + "\n" + read("trin-agents/appearance.js") + "\n" + read("trin-agents/main.js")
+  vm.runInNewContext(read("trin-agents/order.js") + "\n" + read("trin-agents/appearance.js") + "\n"
+    + read("trin-agents/activity.js") + "\n" + read("trin-agents/main.js")
     + "\nthis.AgentsPanel = Agents;", context);
-  context.sessionAddress = (machine, id) => `opencode-session:${encodeURIComponent(machine ?? "")}/${id}`;
   const panel = new context.AgentsPanel();
   Object.assign(panel, { order: JSON.parse(storage["sessions.order"] ?? storage.pins ?? "[]"), clock: { sync() {}, value: () => null },
     activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
@@ -216,13 +216,53 @@ test("a background session can be reordered and keeps its position when it gets 
   assert.equal(JSON.parse(storage["sessions.order"])[0], detached.address);
   running = false;
   assert.equal(sessionRows(panel)[0], "t0");
-  const attached = { ...agents[0], address: "t-resumed" };
+  const report = { app: "opencode", state: "working", title: "Title from the report" };
+  const attached = { ...agents[0], address: "t-resumed", report, records: { ses_job: report } };
   agents.push(attached);
-  panel.activity.session = a => a === attached ? { sessionID: "ses_job" } : null;
   assert.equal(sessionRows(panel)[0], attached.address);
-  panel.activity.session = () => null;
+  attached.title = "Renamed";
   assert.equal(sessionRows(panel)[0], attached.address, "transient rename gap does not change manual rank");
   assert.deepEqual(commands, []);
+});
+
+test("live terminal IDs merge immediately, even with different titles; different IDs do not merge", () => {
+  const { panel, agents, badges, context } = fixture();
+  const report = { app: "opencode", state: "done", title: "Full title before rename" };
+  Object.assign(agents[3], { report, records: { ses_job: report }, title: "Truncated terminal title…" });
+  const secondPane = { ...agents[3], address: "t-same", focused: true };
+  agents.push(secondPane);
+  const job = { address: "opencode-session:/ses_job", background: true, title: "New title", status: "working" };
+  const unrelated = { ...job, address: "opencode-session:/ses_other", title: agents[3].title };
+  const remote = { ...job, address: "opencode-session:server/ses_job", machine: "server" };
+  panel.activity.backgroundRows = () => [job, unrelated, remote];
+  panel.activity.session = () => null; // no results from the async bridge yet
+  assert.deepEqual(sessionRows(panel), ["t0", "t1", "t2", "t-same", unrelated.address, remote.address]);
+  assert.deepEqual(Array.from(context.order), ["t0", "t1", "t2", "t-same"]);
+  assert.deepEqual(badges, ["2"], "the same completed session counts only once");
+  agents.pop();
+  agents[3].records = { ses_next: report };
+  assert.ok(sessionRows(panel).includes(job.address), "switching IDs releases the previous session");
+});
+
+test("the session list shares the current OpenCode title by terminal and session ID", () => {
+  const { panel, agents, context, spaces } = fixture();
+  panel.live = true;
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  spaces[0].tabs[0].named = false;
+  const report = { app: "opencode", state: "working", title: "Terminal title…" };
+  Object.assign(agents[0], { title: "Terminal title…", report, records: { ses_main: report } });
+  let sessionTitle = "Full OpenCode session title";
+  panel.activity.session = (_, id) => id === "ses_main" ? { sessionTitle } : null;
+  const label = () => text(byID(panel.render(), "ag-t0"));
+  assert.match(label(), /Full OpenCode session title/);
+  assert.equal(context.shared("trin.sessions.titles").t0.sessionID, "ses_main");
+  sessionTitle = "Renamed in OpenCode";
+  assert.match(label(), /Renamed in OpenCode/);
+  spaces[0].tabs[0].named = true;
+  assert.match(label(), /Named session/);
+  agents[0].records = { ses_new: report };
+  label();
+  assert.equal(context.shared("trin.sessions.titles").t0, undefined);
 });
 
 test("releasing outside or losing a row during drag never focuses or saves", () => {

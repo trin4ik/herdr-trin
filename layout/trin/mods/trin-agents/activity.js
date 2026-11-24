@@ -1,7 +1,19 @@
 import { agents, terminals, panes, spaces, machines, exec, readTextFile, appHome } from "herdr";
 
-const cleanTitle = title => (title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
 export const sessionAddress = (machine, sessionID) => `opencode-session:${encodeURIComponent(machine ?? "")}/${sessionID}`;
+
+export function terminalSessionID(terminal) {
+  const status = terminal?.report ?? terminal?.status;
+  if (status?.app && status.app !== "opencode") return null;
+  const entries = Object.entries(terminal?.records ?? {}).filter(([id, report]) =>
+    /^ses[A-Za-z0-9_-]+$/.test(id) && report?.app === "opencode");
+  if (entries.length === 1) return entries[0][0];
+  // Herdr can retain multiple reports for a terminal. Only trust the record
+  // selected by its aggregate status, and never guess among identical reports.
+  if (status?.app !== "opencode") return null;
+  const chosen = entries.filter(([, report]) => report.state === status.state && report.title === status.title);
+  return chosen.length === 1 ? chosen[0][0] : null;
+}
 
 export class ActivityMonitor {
   constructor() {
@@ -37,19 +49,16 @@ export class ActivityMonitor {
     for (const a of list) {
       const machine = sp.get(a.space)?.machine ?? null;
       if (!groups.has(machine)) continue;
-      const records = ts.get(a.address)?.records ?? {};
+      const sessionID = terminalSessionID(ts.get(a.address));
       const previous = this.good[a.address];
-      const recordHints = Object.entries(records).filter(([id, r]) => id.startsWith("ses") && r.title === cleanTitle(a.title)).map(([id]) => id).sort();
-      const hints = [...recordHints];
-      if (previous?.title === a.title && previous.sessionID) hints.push(previous.sessionID);
+      const reusable = sessionID ? previous?.sessionID === sessionID : previous?.title === a.title;
       const target = {
         address: a.address,
         title: a.title,
         cwd: ps.get(a.pane)?.cwd,
-        hints: [...new Set(hints)],
-        recordHints,
-        durationState: previous?.title === a.title ? previous.meta?.durationState : undefined,
-        metricsCache: previous?.title === a.title ? previous.meta?.metricsCache : undefined,
+        sessionID,
+        durationState: reusable ? previous?.meta?.durationState : undefined,
+        metricsCache: reusable ? previous?.meta?.metricsCache : undefined,
       };
       groups.get(machine).push(target);
     }
@@ -66,7 +75,7 @@ export class ActivityMonitor {
       this.reconnectTimers.delete(machine);
     }
     this.desiredKeys = new Map([...groups].map(([machine, targets]) => [machine,
-      JSON.stringify(targets.map(({ address, title, cwd, recordHints }) => [address, title, cwd, recordHints]))]));
+      JSON.stringify(targets.map(({ address, title, cwd, sessionID }) => [address, title, cwd, sessionID]))]));
     for (const machine of this.background.keys()) if (!groups.has(machine)) {
       this.background.delete(machine);
       cx.notify();
@@ -134,11 +143,14 @@ export class ActivityMonitor {
             else this.bridgeStates.delete(machine);
           }
           for (const info of Object.values(response)) if (info.meta?.durationRunning) info.meta.durationAt = Date.now();
-          for (const target of targets) next[target.address] = response[target.address]
-            ?? { title: target.title, error: "Task reader returned no session data" };
+          for (const target of targets) next[target.address] = {
+            sessionID: target.sessionID,
+            ...(response[target.address] ?? { title: target.title, error: "Task reader returned no session data" }),
+          };
         } catch {
           if (current()) this.bridgeStates.delete(machine);
-          for (const target of targets) next[target.address] = { title: target.title, error: "OpenCode task API is unavailable" };
+          for (const target of targets) next[target.address] = { title: target.title, sessionID: target.sessionID,
+            error: "OpenCode task API is unavailable" };
         } finally {
           this.inFlight.set(machine, this.inFlight.get(machine) - 1);
           if (this.requests.get(machine) === request) this.busy.delete(machine);
@@ -182,49 +194,42 @@ export class ActivityMonitor {
     return Boolean(info.error) || Date.now() - good.checkedAt > (good.eventBridge ? 45000 : 20000);
   }
 
-  session(agent) {
+  session(agent, sessionID) {
     const info = this.results[agent.address];
-    const known = info?.sessionID ? info : this.good[agent.address];
-    return known?.title === agent.title ? known : null;
+    const known = info?.sessionID && (Object.hasOwn(info, "sessionTitle") || !info.error) ? info : this.good[agent.address];
+    return sessionID && known?.sessionID === sessionID ? known : null;
   }
 
-  backgroundRows(attached) {
-    const claimed = new Map();
-    for (const { agent, machine } of attached) {
-      const sessionID = this.session(agent)?.sessionID;
-      if (!sessionID) continue;
-      if (!claimed.has(machine)) claimed.set(machine, new Set());
-      claimed.get(machine).add(sessionID);
-    }
-    return [...this.background].flatMap(([machine, sessions]) =>
-      sessions.filter(s => !claimed.get(machine)?.has(s.sessionID)).map(s => ({
-        ...s, machine, address: sessionAddress(machine, s.sessionID),
-        program: { name: "OpenCode" }, status: "working", background: true,
-      })));
+  backgroundRows() {
+    return [...this.background].flatMap(([machine, sessions]) => sessions.map(s => ({
+      ...s, machine, address: sessionAddress(machine, s.sessionID),
+      program: { name: "OpenCode" }, status: "working", background: true,
+    })));
   }
 
-  get(agent) {
+  get(agent, sessionID) {
     const info = this.results[agent.address];
-    if (!info || info.title !== agent.title) return null;
+    if (!info || (sessionID ? info.sessionID !== sessionID : info.title !== agent.title)) return null;
     const good = this.good[agent.address];
-    if (!good || good.title !== agent.title) return null;
+    if (!good || (sessionID ? good.sessionID !== sessionID : good.title !== agent.title)) return null;
     if (!(good.subagents > 0 || good.shells > 0)) return null;
     const stale = this.stale(info, good);
     return { ...good, stale };
   }
 
-  details(agent) {
+  details(agent, sessionID) {
     const info = this.results[agent.address];
     const good = this.good[agent.address];
-    if (!info || info.title !== agent.title || good?.title !== agent.title || !good.meta) return null;
+    if (!info || !good?.meta || (sessionID ? info.sessionID !== sessionID || good.sessionID !== sessionID
+      : info.title !== agent.title || good.title !== agent.title)) return null;
     return { ...good.meta, sessionID: good.sessionID, stale: this.stale(info, good) };
   }
 
-  notice(agent) {
+  notice(agent, sessionID) {
     const info = this.results[agent.address];
-    if (!info || info.title !== agent.title) return "";
+    if (!info || (sessionID ? info.sessionID !== sessionID : info.title !== agent.title)) return "";
     const good = this.good[agent.address];
-    if (info.error || (good && this.stale(info, good))) return this.get(agent)
+    if (info.error || (good && this.stale(info, good))) return this.get(agent, sessionID)
       ? "Last known task counts; refresh is paused or unavailable"
       : "Task counts unavailable (not zero)";
     return good?.pendingZero?.length ? "Confirming task completion on the next refresh" : "";
@@ -234,7 +239,8 @@ export class ActivityMonitor {
     Object.assign(this.results, next);
     for (const [address, info] of Object.entries(next)) {
       const old = this.good[address];
-      const same = old?.title === info.title && (!info.sessionID || !old.sessionID || old.sessionID === info.sessionID);
+      const same = old && (old.sessionID && info.sessionID
+        ? old.sessionID === info.sessionID : old.title === info.title);
       if (!same) {
         delete this.good[address];
         delete this.zeroes[address];

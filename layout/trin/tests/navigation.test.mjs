@@ -35,14 +35,15 @@ function find(node, id) {
 }
 
 function fixture(mod, initial, platform = "macos") {
-  let list = initial;
+  let list = initial, tabPanes = [], live = [];
+  const sharedState = {};
   const commands = [];
   const source = fs.readFileSync(new URL(`../mods/${mod}/main.js`, import.meta.url), "utf8")
     .replace(/^import .*;\n/gm, "").replace("export default class", "class");
   const name = mod === "trin-tabs" ? "Tabs" : "Spaces";
   const context = {
     View: class {}, div: element, svg: element, image: element, h_flex: element, v_flex: element,
-    spaces: () => list, panes: () => [], shared: () => undefined, theme: () => ({}),
+    spaces: () => list, panes: () => tabPanes, terminals: () => live, shared: key => sharedState[key], theme: () => ({}),
     window: () => ({ platform }), layout: () => ({}), settings: () => ({ zoom: 1 }),
     run: (command, args) => commands.push({ command, args }),
     localStorage: { getItem: () => null, setItem() {} },
@@ -50,7 +51,8 @@ function fixture(mod, initial, platform = "macos") {
   vm.runInNewContext(source + `\nthis.Panel = ${name};`, context);
   const panel = new context.Panel();
   Object.assign(panel, { pressed: null, over: null, panels: {}, spaceAgents: new Map() });
-  return { panel, commands, setList: next => { list = next; } };
+  return { panel, commands, sharedState, setList: next => { list = next; },
+    setTerminals: (next, panes) => { live = next; tabPanes = panes; } };
 }
 
 const cx = { stop_propagation() {}, notify() {} };
@@ -165,6 +167,26 @@ test("each tab contains only title and close, including inactive and working tab
     assert.ok(find(node, `close-${id}`));
     assert.equal(node.childNodes.length, id === "a" ? 3 : 2);
   }
+});
+
+test("unnamed tabs display the verified OpenCode title and do not reuse another session's name", () => {
+  const initial = [{ id: "space", active: true, tabs: [tab("a")] }];
+  const f = fixture("trin-tabs", initial);
+  const report = { app: "opencode", state: "working", title: "Terminal name…" };
+  const terminal = { address: "t1", report, records: { ses_live: report } };
+  f.setTerminals([terminal], [{ tab: "a", terminal: "t1", title: "OC | Terminal name…" }]);
+  const name = () => find(f.panel.render(), "tab-a").childNodes[1].childNodes[0];
+  const setTitle = title => { f.sharedState["trin.sessions.titles"] = { t1: { sessionID: "ses_live", title } }; };
+  setTitle("Full server name");
+  assert.equal(name(), "Full server name");
+  setTitle("Renamed on the server");
+  assert.equal(name(), "Renamed on the server");
+  terminal.records = { ses_other: report };
+  assert.equal(name(), "Terminal name…");
+  terminal.records = { ses_live: report };
+  f.setList([{ ...initial[0], tabs: [{ ...tab("a"), named: true, name: "User alias" }] }]);
+  assert.equal(name(), "User alias");
+  assert.deepEqual(f.commands, []);
 });
 
 test("OpenCode button uses the same project-root action as Command-T", () => {
