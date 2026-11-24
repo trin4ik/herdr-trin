@@ -16,6 +16,10 @@ import urllib.request
 import urllib.error
 
 
+RECENT_SESSION_LIMIT = 50
+RECENT_SESSION_WINDOW_MS = 60 * 60 * 1000
+
+
 class Unavailable(Exception):
     pass
 
@@ -346,6 +350,26 @@ def active_sessions(api):
     return active
 
 
+def recent_sessions(api, now):
+    deadline = api.deadline
+    api.deadline = min(deadline, time.monotonic() + 1)
+    try:
+        items = api.get("/api/session", parentID="null", archived="false",
+                        order="desc", limit=str(RECENT_SESSION_LIMIT))["data"]
+        for item in items[:RECENT_SESSION_LIMIT]:
+            stamps = item.get("time") or {}
+            # Completion can happen long after creation. Do not use `updated`
+            # or `viewed`: viewing/renaming an old session is not new work.
+            if any(isinstance(stamp, (int, float)) and 0 <= now - stamp <= RECENT_SESSION_WINDOW_MS
+                   for stamp in (stamps.get("created"), stamps.get("idle"))):
+                yield item
+    except Exception:
+        # Recent-history lookup is optional; active discovery stays available.
+        return
+    finally:
+        api.deadline = deadline
+
+
 def collect_panel(api, targets):
     """The same active snapshot feeds terminal metrics and discovery."""
     active = active_sessions(api)
@@ -358,9 +382,9 @@ def collect_panel(api, targets):
         except Exception:
             return None
 
-    ids = sorted(sid for sid, status in active.items()
-                 if sid.startswith("ses") and status.get("type") == "running")
-    background = []
+    running_ids = {sid for sid, status in active.items()
+                   if sid.startswith("ses") and status.get("type") == "running"}
+    ids = sorted(running_ids)
     if ids:
         # Discovery has a small budget of its own; optional display metadata
         # cannot monopolize the lease or starve existing terminal metrics.
@@ -372,15 +396,21 @@ def collect_panel(api, targets):
                     if item is None:
                         continue
                     cache[sid] = item
-                    if hidden_session(item):
-                        continue
-                    background.append({
-                        "sessionID": sid, "title": item.get("title") or "OpenCode",
-                        "folder": (item.get("location") or {}).get("directory"),
-                        "meta": listed_model(read_model(item.get("model"))),
-                    })
         finally:
             api.deadline = deadline
+    for item in recent_sessions(api, int(time.time() * 1000)):
+        cache.setdefault(item["id"], item)
+    background = []
+    for sid, item in cache.items():
+        if not sid.startswith("ses") or hidden_session(item):
+            continue
+        stamps = item.get("time") or {}
+        status = "working" if sid in running_ids else "done" if item.get("outcome") or stamps.get("idle") else "idle"
+        background.append({
+            "sessionID": sid, "title": item.get("title") or "OpenCode",
+            "folder": (item.get("location") or {}).get("directory"),
+            "status": status, "meta": listed_model(read_model(item.get("model"))),
+        })
     snapshot = {}
     if targets:
         try:
@@ -399,7 +429,7 @@ def collect_panel(api, targets):
             known = attached.get(row["sessionID"])
             if known and known.get("modelID"):
                 row["meta"] = {key: known.get(key) for key in ("modelID", "providerID", "variant", "modelFromHistory")}
-            elif not known and not cache[row["sessionID"]].get("revert"):
+            elif not known and row["status"] != "idle" and not cache[row["sessionID"]].get("revert"):
                 unresolved.append(row)
     if unresolved:
         deadline = api.deadline

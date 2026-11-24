@@ -151,6 +151,14 @@ class FollowTests(unittest.TestCase):
         self.assertEqual(result["reason"], "event")
         self.assertEqual(result["background"], changed)
 
+    def test_background_creation_is_subscribed_even_without_any_open_tabs(self):
+        row = {"sessionID": "ses_new", "title": "Created", "status": "idle"}
+        event = b'data: {"type":"session.created","data":{"sessionID":"ses_new"}}\n\n'
+        result, _ = self.run_follow([{}, {}], [event], bridge.fingerprint({}, []), backgrounds=[[], [row]])
+        self.assertIn("session.created", self.api.event_types)
+        self.assertEqual(result["reason"], "event")
+        self.assertEqual(result["background"], [row])
+
     def test_text_deltas_and_connect_notification_do_not_query(self):
         first = snapshot()
         events = [b'data: {"type":"session.text.delta"}\n\n', b'data: {"type":"server.connected"}\n\n']

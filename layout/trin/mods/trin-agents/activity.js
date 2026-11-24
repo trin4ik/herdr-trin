@@ -256,7 +256,7 @@ export class ActivityMonitor {
   backgroundRows() {
     return [...this.background].flatMap(([machine, sessions]) => sessions.map(s => ({
       ...s, machine, address: sessionAddress(machine, s.sessionID),
-      program: { name: "OpenCode" }, status: "working", background: true,
+      program: { name: "OpenCode" }, status: s.status ?? "working", background: true,
     })));
   }
 

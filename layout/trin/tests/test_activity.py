@@ -24,7 +24,7 @@ class FakeAPI:
 
     def get(self, path, **query):
         if path == "/api/session":
-            return {"data": [s for s in self.sessions.values() if query["search"] in s.get("title", "")]}
+            return {"data": [s for s in self.sessions.values() if query.get("search", "") in s.get("title", "")]}
         if path == "/api/session/active":
             return {"data": self.active}
         if path.startswith("/api/session/"):
@@ -83,7 +83,7 @@ class ActivityTests(unittest.TestCase):
     def test_main_session_is_not_a_subagent(self):
         self.assertEqual(self.result(FakeAPI([session("root")], ["root"]))["subagents"], 0)
 
-    def test_panel_discovers_only_active_main_unarchived_sessions_without_terminals(self):
+    def test_panel_discovers_active_root_and_excludes_old_idle_children_and_archived(self):
         root = session("ses_root", "Real background")
         archived = {**session("ses_test"), "time": {"archived": 1000}}
         child = session("ses_child", "Child", "ses_root")
@@ -94,8 +94,36 @@ class ActivityTests(unittest.TestCase):
         snapshot, background = activity.collect_panel(api, [])
         self.assertEqual(snapshot, {})
         self.assertEqual(background, [{"sessionID": "ses_root", "title": "Real background", "folder": "/project",
+                                      "status": "working",
                                       "meta": {"modelID": "model", "providerID": "provider", "variant": "high",
                                                "modelFromHistory": False}}])
+
+    def test_external_rows_survive_completion_and_reconnect_and_include_new_idle_sessions(self):
+        now = 1795000000000
+        fresh = {"time": {"created": now - 1000}}
+        done = {"time": {"created": now - 7200000, "idle": now - 1000}, "outcome": "succeeded"}
+        old = {"time": {"created": now - 7200000, "idle": now - 7200000, "viewed": now, "updated": now}}
+        api = FakeAPI([{**session("ses_new"), **fresh}, {**session("ses_done"), **done},
+                       {**session("ses_old"), **old},
+                       {**session("ses_child", parent="ses_new"), **fresh},
+                       {**session("ses_archived"), "time": {**fresh["time"], "archived": now}}], ["ses_new"])
+        with patch.object(activity.time, "time", return_value=now / 1000):
+            rows = lambda: {r["sessionID"]: r["status"] for r in activity.collect_panel(api, [])[1]}
+            self.assertEqual(rows(), {"ses_new": "working", "ses_done": "done"})
+            api.active.clear()
+            self.assertEqual(rows(), {"ses_new": "idle", "ses_done": "done"})
+            api.sessions["ses_new"].update(done)
+            self.assertEqual(rows(), {"ses_new": "done", "ses_done": "done"})
+
+    def test_recent_session_lookup_failure_does_not_erase_active_rows(self):
+        class NoRecentAPI(FakeAPI):
+            def get(self, path, **query):
+                if path == "/api/session":
+                    raise activity.Unavailable()
+                return super().get(path, **query)
+
+        api = NoRecentAPI([session("ses_live")], ["ses_live"])
+        self.assertEqual([r["sessionID"] for r in activity.collect_panel(api, [])[1]], ["ses_live"])
 
     def test_detached_sessions_with_no_selected_model_read_one_assistant(self):
         calls = []

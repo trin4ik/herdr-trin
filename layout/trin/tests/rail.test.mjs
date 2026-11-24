@@ -347,7 +347,7 @@ test("live terminal IDs merge immediately, even with different titles; different
   assert.ok(sessionRows(panel).includes(job.address), "switching IDs releases the previous session");
 });
 
-test("first-message race: the new OpenCode name never flashes as a second row before its ID arrives", () => {
+test("first-message race: a terminal that reports its ID within the ownership grace has no second row", () => {
   const { panel, agents, advance } = fixture();
   const row = agents[0];
   row.app = "opencode";
@@ -359,7 +359,7 @@ test("first-message race: the new OpenCode name never flashes as a second row be
   panel.activity.backgroundRows = () => incoming;
   const provisional = ["t0", "t1", "t2", "t3"];
   assert.deepEqual(sessionRows(panel), provisional, "a new candidate does not appear in the first frame");
-  advance(12000);
+  advance(3000);
   assert.deepEqual(sessionRows(panel), [...provisional, incoming[1].address],
     "no duplicate even if the working terminal is still missing its session ID after the grace interval");
   row.title = "Renamed terminal";
@@ -372,7 +372,7 @@ test("first-message race: the new OpenCode name never flashes as a second row be
   assert.deepEqual(sessionRows(panel), [...provisional, incoming[1].address]);
 });
 
-test("a genuine background row waits only for same-machine working ambiguity, without flapping existing rows", () => {
+test("an unrelated unresolved tab cannot hide a background row beyond the bounded grace", () => {
   const { panel, agents, advance } = fixture();
   const ids = ["opencode-session:/ses_shown", "opencode-session:/ses_waiting"];
   let visible = [ids[0]];
@@ -385,11 +385,9 @@ test("a genuine background row waits only for same-machine working ambiguity, wi
   row.status = "working";
   visible = ids;
   panel.render();
-  advance(5000);
+  advance(3000);
   assert.ok(sessionRows(panel).includes(ids[0]), "existing rows do not flicker");
   assert.ok(!sessionRows(panel).includes(ids[1]));
-  row.status = "idle";
-  assert.ok(!sessionRows(panel).includes(ids[1]), "the grace restarts once the ambiguity clears");
   advance(1000);
   assert.deepEqual(sessionRows(panel).slice(-2), ids);
 });
@@ -407,7 +405,7 @@ test("a previously identified session reappears after its last tab closes, despi
   owned.records = {};
   panel.activity.backgroundRows = () => [detached, duplicate];
   panel.render();
-  advance(12000);
+  advance(1000);
   assert.ok(!sessionRows(panel).includes(detached.address));
   // Closing the tab removes its terminal, unlike losing an idle report.
   agents.shift();
@@ -418,6 +416,26 @@ test("a previously identified session reappears after its last tab closes, despi
   // A newly confirmed terminal takes precedence again.
   Object.assign(other, { report, records: { ses_known: report } });
   assert.ok(!sessionRows(panel).includes(detached.address));
+});
+
+test("an unseen external result stays clickable while an already opened result does not come back after close", () => {
+  const { panel, agents, advance } = fixture();
+  const opened = [];
+  panel.openBackground = a => opened.push(a.sessionID);
+  const task = { address: "opencode-session:/ses_done", sessionID: "ses_done", title: "External result",
+    status: "working", background: true };
+  panel.activity.backgroundRows = () => [task];
+  panel.render();
+  task.status = "done";
+  advance(1000);
+  click(byID(panel.render(), `ag-${task.address}`));
+  assert.deepEqual(opened, [task.sessionID]);
+  const report = { app: "opencode", state: "idle", title: "External result" };
+  agents.push({ ...agents[1], address: "t-resumed", report, records: { ses_done: report } });
+  panel.render();
+  agents.pop();
+  advance(1000);
+  assert.equal(byID(panel.render(), `ag-${task.address}`), undefined);
 });
 
 test("a one-shot redraw releases genuine background rows in the narrow panel without other events", () => {

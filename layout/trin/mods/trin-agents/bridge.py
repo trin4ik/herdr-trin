@@ -35,7 +35,7 @@ EVENTS = {
     "model.updated", "provider.updated", "config.updated", "models-dev.refreshed",
 }
 DISCOVERY_EVENTS = {
-    "session.execution.started", "session.execution.succeeded", "session.execution.failed",
+    "session.created", "session.execution.started", "session.execution.succeeded", "session.execution.failed",
     "session.execution.interrupted", "session.status", "session.idle", "session.deleted",
     "session.archived", "session.unarchived", "session.renamed", "session.moved",
     "session.model.selected", "session.step.started", "location.shutdown",

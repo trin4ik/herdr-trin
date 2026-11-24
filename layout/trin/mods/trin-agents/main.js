@@ -10,6 +10,7 @@ import { modelDescription, spaceAvatar, statusIndicator, sessionDetails } from "
 import { parseOrder, orderedSessions, moveSession } from "./order.js";
 
 const ORDER_KEY = "sessions.order";
+const ATTACHED_KEY = "sessions.attached";
 const TITLES_KEY = "trin.sessions.titles";
 const DRAG_THRESHOLD = 4;
 const COMPLETION_BLUE = "#3b82f6";
@@ -52,6 +53,7 @@ export default class Agents extends View {
     this.drag = null;
     this.hiddenOpen = localStorage.getItem("sessions.hidden-open") === "true";
     this.opening = new Map();
+    this.backgroundAdmission = new BackgroundAdmission(parseOrder(localStorage.getItem(ATTACHED_KEY)));
     this.activity = new ActivityMonitor(shared(TITLES_KEY) ?? {});
     this.clock = new WorkingClock();
     this.live = !checking();
@@ -285,7 +287,9 @@ export default class Agents extends View {
     this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), now);
     const claimed = new Set([...attached.keys(), ...excluded]);
     this.backgroundAdmission ??= new BackgroundAdmission();
-    this.backgroundAdmission.remember(owners, all);
+    if (this.backgroundAdmission.remember(owners, all) && this.live) {
+      localStorage.setItem(ATTACHED_KEY, JSON.stringify([...this.backgroundAdmission.seen]));
+    }
     for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now)) {
       attached.set(agent.address, { id: agent.address, agent });
     }
