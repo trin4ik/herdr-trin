@@ -4,7 +4,7 @@ import vm from "node:vm";
 import test from "node:test";
 
 const source = fs.readFileSync(new URL("../mods/trin-agents/activity.js", import.meta.url), "utf8")
-  .replace(/^import .*;\n/, "").replace("export class ActivityMonitor", "class ActivityMonitor")
+  .replace(/^import .*;\n/, "").replace(/^export /gm, "")
   + "\nthis.Monitor = ActivityMonitor;";
 const clockSource = fs.readFileSync(new URL("../mods/trin-agents/metrics.js", import.meta.url), "utf8");
 const { WorkingClock } = await import(`data:text/javascript,${encodeURIComponent(clockSource)}`);

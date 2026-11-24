@@ -1,11 +1,15 @@
-// Main sessions in Herdr's space/tab/pane order, with explicit pins first.
+// Main sessions with a manual sidebar order independent of terminal tabs.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, spaces, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
-import { ActivityMonitor } from "./activity.js";
+import { ActivityMonitor, sessionAddress } from "./activity.js";
 import { WorkingClock } from "./metrics.js";
 import { spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
+import { parseOrder, orderedSessions, moveSession } from "./order.js";
+
+const ORDER_KEY = "sessions.order";
+const DRAG_THRESHOLD = 4;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -35,7 +39,8 @@ function sessionName(tab, agent) {
 }
 export default class Agents extends View {
   init(_props, cx) {
-    this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]");
+    this.order = parseOrder(localStorage.getItem(ORDER_KEY) ?? localStorage.getItem("pins"));
+    this.drag = null;
     this.activity = new ActivityMonitor();
     this.clock = new WorkingClock();
     this.live = !checking();
@@ -54,6 +59,7 @@ export default class Agents extends View {
   }
 
   close() {
+    this.drag = null;
     this.activity?.close();
     if (this.badge !== undefined) setBadge(null);
   }
@@ -67,19 +73,59 @@ export default class Agents extends View {
     this.badge = text;
   }
 
-  setPins(pins) {
-    this.pins = pins;
-    localStorage.setItem("pins", JSON.stringify(pins));
+  cancelDrag(cx) {
+    const redraw = this.drag?.active;
+    this.drag = null;
+    if (redraw) cx.notify();
   }
 
-  // Drops pins of agents that ended. Only for machines the list has heard from:
-  // right after a start, or while a machine connects, its agents aren't listed yet.
-  prunePins(all) {
-    const machine = (addr) => (addr.includes("/") ? addr.split("/")[0] : "");
-    const heard = new Set(all.map((k) => machine(k.address)));
-    const live = new Set(all.filter((k) => k.state === "live").map((k) => k.address));
-    const kept = this.pins.filter((p) => !heard.has(machine(p)) || live.has(p));
-    if (kept.length !== this.pins.length) this.setPins(kept);
+  dragTarget(event, id, cx) {
+    const drag = this.drag;
+    if (!drag) return;
+    const { x, y } = event.position;
+    const active = drag.active || Math.hypot(x - drag.start.x, y - drag.start.y) >= DRAG_THRESHOLD;
+    const over = active && id !== drag.id ? id : null;
+    const after = Boolean(over && event.local_position && event.bounds && event.local_position.y >= event.bounds.height / 2);
+    if (active !== drag.active || over !== drag.over || after !== drag.after) {
+      Object.assign(drag, { active, over, after });
+      cx.notify();
+    }
+  }
+
+  sortable(row, { id, agent }, title, collapsed, t, select) {
+    const sorting = this.rows.length > 1;
+    return row.relative().accessibility_label(title)
+      .when(sorting, el => el.cursor_grab())
+      .when(!sorting && !agent.background, el => el.cursor_pointer())
+      .when(this.drag?.active && this.drag.id === id, el => el.opacity(0.5).cursor_grabbing())
+      .when(this.drag?.over === id, el => el.child(div().id(`session-drop-${agent.address}`).absolute()
+        .left(collapsed ? 4 : 8).right(collapsed ? 4 : 8).h(2).rounded(1).bg(t.accent)
+        .when(this.drag.after, line => line.bottom(0)).when(!this.drag.after, line => line.top(0))))
+      .on_mouse_down("left", (event, cx) => {
+        cx.stop_propagation();
+        this.cancelDrag(cx);
+        this.drag = { id, start: event.position, active: false, over: null, after: false };
+      })
+      .on_mouse_move((event, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.dragTarget(event, id, cx);
+      })
+      .on_mouse_up("left", (event, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.dragTarget(event, id, cx);
+        const { id: source, active, over, after } = this.drag;
+        this.cancelDrag(cx);
+        if (!active && source === id && !agent.background) select(agent);
+        else if (active && over && event.local_position && event.bounds) {
+          const order = moveSession(this.rows, this.renderOrder, source, over, after);
+          if (order !== this.renderOrder) {
+            this.order = order;
+            localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+          }
+        }
+      });
   }
 
   render(cx) {
@@ -114,13 +160,32 @@ export default class Agents extends View {
     };
     // Track work time even when the compact rail doesn't show it.
     this.clock.sync(roots, a => this.activity.details(a), Date.now());
-    this.prunePins(all);
-    const pinned = this.pins.map(p => roots.find(a => a.address === p)).filter(Boolean);
-    const list = [...pinned, ...roots.filter(a => !this.pins.includes(a.address))];
-    if (this.live !== false) setAgentOrder(list.map((a) => a.address));
-    const background = this.activity.backgroundRows?.(roots.map(agent => ({
+    const attached = roots.map(agent => ({
       agent, machine: spaceById.get(agent.space)?.machine ?? null,
-    }))) ?? [];
+    }));
+    const background = this.activity.backgroundRows?.(attached) ?? [];
+    const aliases = new Map(), used = new Set();
+    const keys = new Map();
+    const rows = attached.map(({ agent, machine }) => {
+      const sid = this.activity.session?.(agent)?.sessionID;
+      // A rename briefly invalidates metadata; don't move the row until the
+      // bridge confirms that a different OpenCode session took over the pane.
+      const key = sid ? sessionAddress(machine, sid) : this.rowKeys?.get(agent.address);
+      if (key) keys.set(agent.address, key);
+      const id = key && !used.has(key) ? key : agent.address;
+      if (key === id) aliases.set(agent.address, id);
+      used.add(id);
+      return { id, agent };
+    });
+    this.rowKeys = keys;
+    for (const agent of background) {
+      if (!used.has(agent.address)) rows.push({ id: agent.address, agent });
+    }
+    this.renderOrder = [...new Set(this.order.map(id => aliases.get(id) ?? id))];
+    this.rows = orderedSessions(rows, this.renderOrder);
+    if (this.drag && (!rows.some(row => row.id === this.drag.id)
+      || (this.drag.over && !rows.some(row => row.id === this.drag.over)))) this.drag = null;
+    if (this.live !== false) setAgentOrder(this.rows.filter(row => !row.agent.background).map(row => row.agent.address));
 
     const tabs = sp.flatMap(s => s.tabs);
     const label = (a) => sessionName(tabs.find(tab => tab.id === a.tab), a);
@@ -145,7 +210,6 @@ export default class Agents extends View {
           .items_center()
           .justify_center()
           .tooltip(description)
-          .when(!a.background, el => el.cursor_pointer().on_click(() => focusAgent(a)))
           .child(h_flex().relative().size(32).flex_none().rounded(7).items_center().justify_center()
             .when(a.focused && !attention, el => el.bg(t.selected).border(1).border_color(t.accent))
             .when(attention, el => el.bg(signal + "26").border(2).border_color(signal))
@@ -158,24 +222,6 @@ export default class Agents extends View {
               .when(!attention, el => el.child(statusIndicator(t, a.status)))));
       }
       const idle = a.status === "idle" && !a.focused;
-      const isPinned = this.pins.includes(a.address);
-      const pin = div()
-        .id(`pin-${a.address}`)
-        .flex_none()
-        .p(2)
-        .rounded(4)
-        .text_color(t.dim)
-        .cursor_pointer()
-        .hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .tooltip(isPinned ? "Unpin" : "Pin to the top")
-        .on_click((_e, cx) => {
-          cx.stop_propagation();
-          this.setPins(isPinned ? this.pins.filter((p) => p !== a.address) : [...this.pins, a.address]);
-          // The row moves away from under the pointer, and no hover-out comes.
-          this.hovered = null;
-          cx.notify();
-        })
-        .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
       const name = label(a);
       const activity = this.activity?.get(a);
       const notice = backgroundHint ?? this.activity?.notice(a);
@@ -188,18 +234,11 @@ export default class Agents extends View {
         .rounded(8)
         .gap(4)
         .when(a.focused, (el) => el.bg(t.selected))
-        .when(!a.background, el => el.cursor_pointer().hover(s => s.bg(t.hover))
-          .on_hover((on, cx) => {
-            if (on) this.hovered = a.address;
-            else if (this.hovered === a.address) this.hovered = null;
-            cx.notify();
-          })
-          .on_click(() => focusAgent(a)))
+        .hover(s => s.bg(t.hover))
         .child(h_flex().h(18).min_w(0).gap(7).items_center()
            .child(pic)
           .child(div().h(18).line_height("18px").flex_1().min_w(0).truncate().text_color(idle ? t.muted : t.foreground)
             .tooltip(notice ? `${name}\n${notice}` : name).child(name))
-          .when(this.hovered === a.address, el => el.child(pin.bg(t.raised)))
           .child(statusIndicator(t, a.status)))
         .child(sessionDetails(t, meta, activity, this.clock.value(a.address), a.address, a.background));
     };
@@ -211,11 +250,19 @@ export default class Agents extends View {
       .border_t(1)
       .border_color(t.border)
       .text_size(13)
-      .child(v_flex().id("ag-list").flex_1().min_h(0).pt(6).px(collapsed ? 0 : 8).overflow_y_scrollbar()
+      .when(!collapsed, el => el.child(h_flex().id("sessions-title").h(28).flex_none().pl(16).pr(10).items_center()
+        .text_size(11).text_color(t.dim)
+        .child(div().flex_1().min_w(0).truncate().child("Сессии")
+          .when(this.rows.length > 1, title => title.tooltip("Перетащите строку выше или ниже, чтобы изменить порядок")))))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).pt(collapsed ? 6 : 0).px(collapsed ? 0 : 8).overflow_y_scrollbar()
         .when(!collapsed, el => el.mode("always"))
-        .when(list.length === 0 && background.length === 0 && !collapsed, el =>
+        .on_mouse_move((event, cx) => this.dragTarget(event, null, cx))
+        .on_mouse_up("left", (_event, cx) => this.cancelDrag(cx))
+        .on_mouse_down_out((_event, cx) => this.cancelDrag(cx))
+        .on_hover((over, cx) => { if (!over) this.cancelDrag(cx); })
+        .when(this.rows.length === 0 && !collapsed, el =>
           el.child(div().px(4).text_size(12).text_color(t.muted).child("Нет сессий со статусом.")))
-        .children([...list, ...background].map(row)))
+        .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent))))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

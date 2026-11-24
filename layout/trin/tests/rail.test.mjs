@@ -24,7 +24,16 @@ const byID = (el, id) => nodes(el).find(n => n.attrs.id?.[0] === id);
 const read = file => fs.readFileSync(new URL(`../mods/${file}`, import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "").replaceAll("export function", "function").replace("export default class", "class");
 
-function fixture() {
+const mouse = (y, local = 4, height = 52) => ({
+  position: { x: 12, y }, local_position: { x: 12, y: local }, bounds: { width: 200, height },
+});
+const cx = { notify() {}, stop_propagation() {} };
+const click = row => {
+  row.handlers.on_mouse_down(mouse(10), cx);
+  row.handlers.on_mouse_up(mouse(10), cx);
+};
+
+function fixture(storage = {}) {
   const spaces = [{ id: "s", name: "Herdr", active: true, tabs: [{ id: "tab", named: true, name: "Named session" }] }];
   const agents = ["working", "idle", "blocked", "done"].map((status, seq) => ({
     address: `t${seq}`, pane: `p${seq}`, space: "s", tab: "tab", status, seq,
@@ -40,15 +49,16 @@ function fixture() {
     focused: () => ({ agent: "t1" }), setAgentOrder: order => { context.order = order; },
     setBadge: text => badges.push(text),
     window: () => ({ platform: "macos" }),
-    localStorage: { getItem: () => null, setItem() {} },
+    localStorage: { getItem: key => storage[key] ?? null, setItem(key, value) { storage[key] = value; } },
     run: (name, args) => commands.push({ name, args }),
   };
-  vm.runInNewContext(read("trin-agents/appearance.js") + "\n" + read("trin-agents/main.js")
+  vm.runInNewContext(read("trin-agents/order.js") + "\n" + read("trin-agents/appearance.js") + "\n" + read("trin-agents/main.js")
     + "\nthis.AgentsPanel = Agents;", context);
+  context.sessionAddress = (machine, id) => `opencode-session:${encodeURIComponent(machine ?? "")}/${id}`;
   const panel = new context.AgentsPanel();
-  Object.assign(panel, { pins: [], clock: { sync() {}, value: () => null },
+  Object.assign(panel, { order: JSON.parse(storage["sessions.order"] ?? storage.pins ?? "[]"), clock: { sync() {}, value: () => null },
     activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
-  return { panel, commands, badges, agents, context, t, spaces };
+  return { panel, commands, badges, agents, context, t, spaces, storage };
 }
 
 test("Dock badge sums live blocked and unseen done sessions reactively across projects", () => {
@@ -89,13 +99,14 @@ test("Dock badge clears on initial empty snapshot and ignores idle and working",
   assert.equal(badges.at(-1), "1", "blocked counts until resolved even while focused");
 });
 
-test("wide Agents drops the title, sort control and sections, preserving tab order and explicit pins", () => {
+test("wide Sessions has a compact title, no sorting menu, and preserves default tab order", () => {
   const { panel, agents, context } = fixture();
   context.layout = () => ({ id: "sidebar", size: { px: 268 } });
   context.setShared("agents.sort", "grouped");
   const rows = () => {
     const root = panel.render();
     assert.equal(byID(root, "ag-sort"), undefined);
+    assert.equal(text(byID(root, "sessions-title")), "Сессии");
     assert.doesNotMatch(text(root), /Agents|Needs you|Working|Idle|Pinned/);
     return byID(root, "ag-list").childNodes.map(n => n.attrs.id[0]);
   };
@@ -103,7 +114,7 @@ test("wide Agents drops the title, sort control and sections, preserving tab ord
   agents[0].status = "done";
   agents[3].status = "working";
   assert.deepEqual(Array.from(rows()), ["ag-t0", "ag-t1", "ag-t2", "ag-t3"]);
-  panel.pins = ["t2"];
+  panel.order = ["t2"];
   assert.deepEqual(Array.from(rows()), ["ag-t2", "ag-t0", "ag-t1", "ag-t3"]);
   assert.deepEqual(Array.from(context.order), ["t2", "t0", "t1", "t3"]);
 });
@@ -115,7 +126,7 @@ test("only main Herdr sessions appear, even when child terminals have panes or p
   agents.push(child, orphan);
   context.terminals = () => [...agents.slice(0, 4), { ...child, parent: "t0" },
     { ...orphan, parent: "offline/starter" }, { address: "nested", parent: "child", state: "live" }];
-  panel.pins = ["child"];
+  panel.order = ["child"];
   for (const width of [44, 268]) {
     context.layout = () => ({ id: "sidebar", size: { px: width } });
     const root = panel.render();
@@ -139,12 +150,85 @@ test("background sessions are visible and read-only, with no terminal navigation
     assert.equal(byID(root, "ag-t1"), undefined);
     const row = byID(root, "ag-opencode-session:/ses_job");
     assert.ok(row);
-    assert.equal(row.handlers.on_click, undefined);
+    click(row);
     assert.deepEqual(Array.from(context.order), ["t0", "t2", "t3"]);
     if (width === 44) assert.match(row.attrs.tooltip[0], /Background job.*\n.*\n.*\nФоновая сессия/);
     else assert.match(text(row), /Background job.*В фоне/);
   }
   assert.deepEqual(commands, []);
+});
+
+const sessionRows = panel => Array.from(byID(panel.render(), "ag-list").childNodes, row => row.attrs.id[0].slice(3));
+
+test("sessions support drop before and after, persist order and preserve click-to-focus in both widths", () => {
+  for (const [width, height] of [[268, 52], [44, 36]]) {
+    const { panel, commands, context, storage } = fixture({ pins: '["t1"]' });
+    context.layout = () => ({ id: "sidebar", size: { px: width } });
+    assert.deepEqual(sessionRows(panel), ["t1", "t0", "t2", "t3"]);
+    const row = id => byID(panel.render(), `ag-${id}`);
+    const drop = (from, to, after) => {
+      row(from).handlers.on_mouse_down(mouse(10), cx);
+      const event = mouse(70, after ? height - 4 : 4, height);
+      row(to).handlers.on_mouse_move(event, cx);
+      assert.equal(byID(row(to), `session-drop-${to}`).attrs[after ? "bottom" : "top"][0], 0);
+      assert.equal(row(from).attrs.opacity[0], 0.5);
+      row(to).handlers.on_mouse_up(event, cx);
+      assert.equal(panel.drag, null);
+      assert.equal(byID(row(to), `session-drop-${to}`), undefined);
+    };
+    drop("t1", "t3", true);
+    assert.deepEqual(sessionRows(panel), ["t0", "t2", "t3", "t1"]);
+    drop("t1", "t2", false);
+    assert.deepEqual(sessionRows(panel), ["t0", "t1", "t2", "t3"]);
+    assert.deepEqual(sessionRows(fixture(storage).panel), ["t0", "t1", "t2", "t3"]);
+    assert.deepEqual(commands, [], "dragging never changes the focused pane");
+    click(row("t1"));
+    assert.equal(commands.at(-1).args.pane, "p1");
+  }
+});
+
+test("a background session can be reordered and keeps its position when it gets a pane", () => {
+  const { panel, agents, storage, commands } = fixture();
+  const detached = { address: "opencode-session:/ses_job", sessionID: "ses_job", background: true,
+    title: "Background job", folder: "/fixture", program: { name: "OpenCode" }, status: "working" };
+  let running = true;
+  panel.activity.backgroundRows = () => running ? [detached] : [];
+  const row = id => byID(panel.render(), `ag-${id}`);
+  row(detached.address).handlers.on_mouse_down(mouse(10), cx);
+  row("t0").handlers.on_mouse_move(mouse(70), cx);
+  row("t0").handlers.on_mouse_up(mouse(70), cx);
+  assert.equal(sessionRows(panel)[0], detached.address);
+  assert.equal(JSON.parse(storage["sessions.order"])[0], detached.address);
+  running = false;
+  assert.equal(sessionRows(panel)[0], "t0");
+  const attached = { ...agents[0], address: "t-resumed" };
+  agents.push(attached);
+  panel.activity.session = a => a === attached ? { sessionID: "ses_job" } : null;
+  assert.equal(sessionRows(panel)[0], attached.address);
+  panel.activity.session = () => null;
+  assert.equal(sessionRows(panel)[0], attached.address, "transient rename gap does not change manual rank");
+  assert.deepEqual(commands, []);
+});
+
+test("releasing outside or losing a row during drag never focuses or saves", () => {
+  for (const reason of ["outside", "gap", "missing-source", "missing-target"]) {
+    const { panel, agents, storage, commands } = fixture();
+    const row = id => byID(panel.render(), `ag-${id}`);
+    row("t0").handlers.on_mouse_down(mouse(10), cx);
+    row("t1").handlers.on_mouse_move(mouse(70), cx);
+    const release = row("t1").handlers.on_mouse_up;
+    const list = byID(panel.render(), "ag-list");
+    if (reason === "outside") list.handlers.on_hover(false, cx);
+    if (reason === "gap") list.handlers.on_mouse_up(mouse(70), cx);
+    if (reason.startsWith("missing")) {
+      agents.splice(reason === "missing-source" ? 0 : 1, 1);
+      panel.render();
+    }
+    release(mouse(70), cx);
+    assert.equal(panel.drag, null, reason);
+    assert.equal(storage["sessions.order"], undefined, reason);
+    assert.deepEqual(commands, []);
+  }
 });
 
 test("agent rail uses project squares, state indicators and full session tooltips, not numbers", () => {
@@ -159,7 +243,7 @@ test("agent rail uses project squares, state indicators and full session tooltip
     assert.ok(row.attrs.tooltip[0].includes(a.status));
     assert.match(row.attrs.tooltip[0], /openai\/gpt-test · medium/);
     assert.ok(nodes(row).some(n => n.attrs.size?.[0] === 22));
-    row.handlers.on_click();
+    click(row);
     assert.equal(commands.at(-1).args.pane, a.pane);
   }
   assert.equal(context.order.length, 4);

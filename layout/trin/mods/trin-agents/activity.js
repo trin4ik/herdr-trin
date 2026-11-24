@@ -1,6 +1,7 @@
 import { agents, terminals, panes, spaces, machines, exec, readTextFile, appHome } from "herdr";
 
 const cleanTitle = title => (title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
+export const sessionAddress = (machine, sessionID) => `opencode-session:${encodeURIComponent(machine ?? "")}/${sessionID}`;
 
 export class ActivityMonitor {
   constructor() {
@@ -197,7 +198,7 @@ export class ActivityMonitor {
     }
     return [...this.background].flatMap(([machine, sessions]) =>
       sessions.filter(s => !claimed.get(machine)?.has(s.sessionID)).map(s => ({
-        ...s, machine, address: `opencode-session:${encodeURIComponent(machine ?? "")}/${s.sessionID}`,
+        ...s, machine, address: sessionAddress(machine, s.sessionID),
         program: { name: "OpenCode" }, status: "working", background: true,
       })));
   }
