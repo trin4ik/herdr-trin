@@ -5,6 +5,7 @@ import test from "node:test";
 
 const read = file => fs.readFileSync(new URL(`../mods/trin-quotas/${file}`, import.meta.url), "utf8");
 const data = await import(`data:text/javascript,${encodeURIComponent(read("data.js"))}`);
+const order = await import(`data:text/javascript,${encodeURIComponent(read("order.js"))}`);
 const metrics = await import(`data:text/javascript,${encodeURIComponent(read("metrics.js"))}`);
 const fixture = JSON.parse(fs.readFileSync(new URL("./fixtures/quota-v1.json", import.meta.url), "utf8"));
 const packet = () => structuredClone(fixture);
@@ -155,7 +156,8 @@ test("a provider without quota history can report null windows without hiding he
 
 test("actual view lifecycle requests immediately, registers a minute timer and closes its monitor", async () => {
   let requests = 0, timer;
-  const context = { View: class {}, QuotaMonitor: scope.Monitor, REFRESH_MS: 60000,
+  const context = { View: class {}, QuotaMonitor: scope.Monitor, REFRESH_MS: 60000, ...order,
+    checking: () => false, localStorage: { getItem: () => null },
     shared: () => null,
     nextCommand: () => new Promise(() => {}),
     requestQuotas: async () => { requests++; return packet(); } };
@@ -172,12 +174,18 @@ test("actual view lifecycle requests immediately, registers a minute timer and c
   assert.equal(requests, 2);
   panel.close(); timer(c);
   assert.equal(requests, 2);
+  context.checking = () => true;
+  const check = new context.Panel(), checkCx = cx();
+  check.init({}, checkCx);
+  assert.equal(requests, 2, "native check never requests subscriptions");
+  assert.equal(checkCx.tasks.length, 0);
 });
 
 test("private endpoint changes replace the cache and reject late replies from the previous service", async () => {
   let command, endpoint = null, release, requested;
   const pending = [];
-  const context = { View: class {}, QuotaMonitor: scope.Monitor, REFRESH_MS: 60000,
+  const context = { View: class {}, QuotaMonitor: scope.Monitor, REFRESH_MS: 60000, ...order,
+    checking: () => false, localStorage: { getItem: () => null },
     shared: () => endpoint, setShared: (_key, value) => { endpoint = value; }, quotaURL: transport.url,
     nextCommand: () => new Promise(resolve => { command = resolve; }),
     requestQuotas: value => { requested = value; return new Promise(resolve => { release = resolve; pending.push(resolve); }); } };
@@ -186,11 +194,13 @@ test("private endpoint changes replace the cache and reject late replies from th
   c.timer = { every() {} };
   panel.init({}, c);
   const old = panel.monitor;
+  panel.drag = { id: "old-id", active: true };
   command("endpoint--" + encodeURIComponent("https://quota.example.com/v1/quotas"));
   await new Promise(setImmediate);
   assert.equal(endpoint, "https://quota.example.com/v1/quotas");
   assert.equal(requested, endpoint);
   assert.notEqual(panel.monitor, old);
+  assert.equal(panel.drag, null);
   pending[0](packet()); await new Promise(setImmediate);
   assert.equal(old.subscriptions.length, 0);
   release(packet()); await new Promise(setImmediate);

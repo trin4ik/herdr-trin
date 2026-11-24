@@ -1,10 +1,14 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, Popover } from "gpui-base";
-import { theme, layout, nextCommand, shared, setShared } from "herdr";
+import { theme, layout, nextCommand, shared, setShared, checking } from "herdr";
 import { usage, compactPercent, primaryWindow, quotaColor, hasWarning, balanceText } from "./metrics.js";
 import { QuotaMonitor, REFRESH_MS } from "./monitor.js";
 import { requestQuotas, quotaURL } from "./transport.js";
 import { quotaDetails } from "./details.js";
+import { parseOrder, orderedSubscriptions, moveSubscription } from "./order.js";
+
+const ORDER_KEY = "subscriptions.order";
+const DRAG_THRESHOLD = 4;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -21,9 +25,12 @@ export default class Quotas extends View {
     this.revealed = null;
     this.disclosureVersion = 0;
     this.closed = false;
+    this.drag = null;
+    this.order = parseOrder(localStorage.getItem(ORDER_KEY));
     this.defaultEndpoint = props?.endpoint;
     this.makeMonitor = () => new QuotaMonitor(() => requestQuotas(shared("trin.quotas.endpoint") ?? this.defaultEndpoint));
     this.monitor = this.makeMonitor();
+    if (checking()) return;
     this.monitor.refresh(cx);
     cx.timer.every(REFRESH_MS, cx => this.monitor.refresh(cx));
     // Native commands also make disclosure accessible without pointer input.
@@ -37,6 +44,7 @@ export default class Quotas extends View {
             const endpoint = command === "reset-endpoint" ? null : quotaURL(decodeURIComponent(command.slice(10)));
             setShared("trin.quotas.endpoint", endpoint);
             this.monitor.close();
+            this.drag = null;
             this.expanded = this.revealed = null;
             this.disclosureVersion++;
             this.monitor = this.makeMonitor();
@@ -54,7 +62,7 @@ export default class Quotas extends View {
     });
   }
 
-  close() { this.closed = true; this.disclosureVersion++; this.monitor?.close(); }
+  close() { this.closed = true; this.drag = null; this.disclosureVersion++; this.monitor?.close(); }
 
   setOpen(id, open, cx) {
     if (this.closed || (!open && this.expanded !== id)) return;
@@ -72,17 +80,72 @@ export default class Quotas extends View {
     });
   }
 
+  cancelDrag(cx) {
+    if (!this.drag) return;
+    const redraw = this.drag.active;
+    this.drag = null;
+    if (redraw) cx.notify();
+  }
+
+  dragTarget(event, id, cx) {
+    const drag = this.drag;
+    if (!drag) return;
+    const active = drag.active || Math.hypot(event.position.x - drag.start.x, event.position.y - drag.start.y) >= DRAG_THRESHOLD;
+    const over = active && id !== drag.id ? id : null;
+    const after = Boolean(over && event.local_position && event.bounds && event.local_position.y >= event.bounds.height / 2);
+    if (active && !drag.active && this.expanded) {
+      this.expanded = this.revealed = null;
+      this.disclosureVersion++;
+    }
+    if (active !== drag.active || over !== drag.over || after !== drag.after) {
+      Object.assign(drag, { active, over, after });
+      cx.notify();
+    }
+  }
+
   disclosure(subscription, t, narrow, viewportHeight) {
-    const open = this.expanded === subscription.id;
-    return Popover.new(`quota-disclosure-${subscription.id}`)
+    const { id } = subscription, open = this.expanded === id;
+    const sorting = this.monitor.subscriptions.length > 1;
+    const row = this.row(subscription, t, narrow).relative()
+      .accessibility_label(`${subscription.name}: подробности лимитов`).hover(el => el.bg(t.hover))
+      .when(sorting, el => el.cursor_grab()).when(!sorting, el => el.cursor_pointer())
+      .when(sorting && this.drag?.active && this.drag.id === id, el => el.opacity(0.5).cursor_grabbing())
+      .when(this.drag?.over === id, el => el.child(div().id(`quota-drop-${id}`).absolute()
+        .left(narrow ? 4 : 12).right(narrow ? 4 : 12).h(2).rounded(1).bg(t.accent)
+        .when(this.drag.after, line => line.bottom(0)).when(!this.drag.after, line => line.top(0))))
+      .on_mouse_down("left", (event, cx) => {
+        // Popover normally opens on press. Defer it until release so a drag is not a click.
+        cx.stop_propagation();
+        this.cancelDrag(cx);
+        this.drag = { id, start: event.position, open, active: false, over: null, after: false };
+      })
+      .on_mouse_move((event, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.dragTarget(event, id, cx);
+      })
+      .on_mouse_up("left", (event, cx) => {
+        if (!this.drag) return;
+        cx.stop_propagation();
+        this.dragTarget(event, id, cx);
+        const { id: source, open: wasOpen, active, over, after } = this.drag;
+        this.cancelDrag(cx);
+        if (!active && source === id) this.setOpen(id, !wasOpen, cx);
+        else if (active && over && event.local_position && event.bounds) {
+          const order = moveSubscription(this.monitor.subscriptions, this.order, source, over, after);
+          if (order !== this.order) {
+            this.order = order;
+            localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+          }
+        }
+      });
+    return Popover.new(`quota-disclosure-${id}`)
       .open(open).anchor("bottom_left")
-      .on_open_change((open, cx) => this.setOpen(subscription.id, open, cx))
-      .trigger(this.row(subscription, t, narrow).cursor_pointer()
-        .accessibility_label(`${subscription.name}: подробности лимитов`)
-        .hover(el => el.bg(t.hover)))
+      .on_open_change((open, cx) => this.setOpen(id, open, cx))
+      .trigger(row)
       .when(open, el => el.content(quotaDetails(subscription, this.monitor, t,
-        this.providerIcon(subscription, t, 22), this.revealed === subscription.id,
-        cx => this.setOpen(subscription.id, false, cx), viewportHeight)));
+        this.providerIcon(subscription, t, 22), this.revealed === id,
+        cx => this.setOpen(id, false, cx), viewportHeight)));
   }
 
   mark(subscription, t, size = 16) {
@@ -143,21 +206,28 @@ export default class Quotas extends View {
   render() {
     const t = theme(), narrow = (find(layout(), "sidebar")?.size?.px ?? 268) < 160;
     const viewportHeight = globalThis.window?.viewport_size?.()?.height;
-    if (this.expanded && !this.monitor.subscriptions.some(s => s.id === this.expanded)) {
+    const subscriptions = orderedSubscriptions(this.monitor.subscriptions, this.order);
+    if (this.drag && !subscriptions.some(s => s.id === this.drag.id)) this.drag = null;
+    if (this.expanded && !subscriptions.some(s => s.id === this.expanded)) {
       this.expanded = null;
       this.revealed = null;
       this.disclosureVersion++;
     }
     return v_flex().size_full().min_h(0).pt(narrow ? 10 : 0).pb(narrow ? 9 : 8).bg(t.chrome).border_t(1).border_color(t.border).text_size(11)
       .when(!narrow, el => el.child(h_flex().h(28).flex_none().pl(16).pr(10).gap(6).items_center().text_color(t.dim)
-        .child(div().flex_1().min_w(0).truncate().child("Подписки"))
+        .child(div().flex_1().min_w(0).truncate().child("Подписки")
+          .when(subscriptions.length > 1, title => title.tooltip("Перетащите строку выше или ниже, чтобы изменить порядок")))
         .when(!narrow, el => el.child(div().text_size(9).text_color(this.monitor.error ? t.ansi3 : t.dim)
            .child(this.monitor.error ? "ошибка" : "расход")))))
-      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
+      .child(v_flex().id("quota-list").flex_1().min_h(0).overflow_y_scrollbar()
         .when(narrow, el => el.gap(8))
-         .when(!this.monitor.subscriptions.length, el => el.child(div().px(narrow ? 2 : 16).py(8).text_size(10).text_color(t.dim)
+        .on_mouse_move((event, cx) => this.dragTarget(event, null, cx))
+        .on_mouse_up("left", (_event, cx) => this.cancelDrag(cx))
+        .on_mouse_down_out((_event, cx) => this.cancelDrag(cx))
+        .on_hover((over, cx) => { if (!over) this.cancelDrag(cx); })
+        .when(!subscriptions.length, el => el.child(div().px(narrow ? 2 : 16).py(8).text_size(10).text_color(t.dim)
           .tooltip(this.monitor.error ? "Сервис недоступен" : this.monitor.busy ? "Загрузка…" : "Нет подписок")
           .child(narrow ? "—" : this.monitor.error ? "Сервис недоступен" : this.monitor.busy ? "Загрузка…" : "Нет подписок")))
-        .children(this.monitor.subscriptions.map(s => this.disclosure(s, t, narrow, viewportHeight))));
+        .children(subscriptions.map(s => this.disclosure(s, t, narrow, viewportHeight))));
   }
 }

@@ -9,6 +9,7 @@ const snapshot = { generatedAt: fixtureNow, subscriptions: fixtureSubscriptions 
 const read = file => fs.readFileSync(new URL(`../mods/trin-quotas/${file}`, import.meta.url), "utf8");
 const demo = await import("./fixtures/quota-demo.js");
 const metrics = await import(`data:text/javascript,${encodeURIComponent(read("metrics.js"))}`);
+const order = await import(`data:text/javascript,${encodeURIComponent(read("order.js"))}`);
 const { subscriptions, DEMO_NOW } = demo;
 
 function native() {
@@ -21,6 +22,9 @@ function native() {
       else if (key === "children") state.childNodes.push(...args[0]);
       else if (key === "when") { if (args[0]) args[1](el); }
       else if (key === "on_click") state.handlers.click = args[0];
+      else if (key.startsWith("on_mouse_") || key === "on_hover") {
+        state.handlers[typeof args[0] === "string" ? `${key}:${args[0]}` : key] = args.at(-1);
+      }
       else if (key === "transition") (state.attrs.transitions ??= []).push(args);
       else state.attrs[key] = args;
       return el;
@@ -34,22 +38,25 @@ function nodes(el) {
 }
 const byID = (root, id) => nodes(root).find(el => el.attrs.id?.[0] === id);
 const text = el => !el || typeof el !== "object" ? String(el ?? "") : el.childNodes.map(text).join("");
-function fixture(width = 268, viewportHeight, colors = {}) {
-  const timers = [];
-  const cx = { notifications: 0, notify() { this.notifications++; }, timer: { after(ms, callback) { timers.push({ ms, callback }); } } };
+function fixture(width = 268, viewportHeight, colors = {}, storage = new Map()) {
+  const timers = [], writes = [];
+  const cx = { notifications: 0, notify() { this.notifications++; }, stop_propagation() {},
+    timer: { after(ms, callback) { timers.push({ ms, callback }); } } };
   const context = { View: class {}, div: native, svg: path => native().asset(path), h_flex: native, v_flex: native,
     Popover: { new: id => native().id(id) },
     theme: () => colors, layout: () => ({ id: "sidebar", size: { px: width } }),
-    QUOTA_URL: "http://127.0.0.1:8098/v1/quotas", ...metrics };
+    QUOTA_URL: "http://127.0.0.1:8098/v1/quotas", ...metrics, ...order,
+    localStorage: { getItem: key => storage.get(key), setItem: (key, value) => { storage.set(key, value); writes.push(value); } },
+    checking: () => true, QuotaMonitor: class {} };
   if (viewportHeight != null) context.window = { viewport_size: () => ({ width: 800, height: viewportHeight }) };
   const source = read("main.js").replace(/^import .*;\n/gm, "").replace("export default class", "class");
   vm.runInNewContext(read("details.js").replace(/^import .*;\n/gm, "").replaceAll("export function", "function")
     + "\nthis.detailHelpers = { detailsHeight, balanceLabel, apiUsageRow };", context);
   vm.runInNewContext(source + "\nthis.Panel = Quotas;", context);
   const panel = new context.Panel();
-  Object.assign(panel, { expanded: null, revealed: null, disclosureVersion: 0, closed: false });
+  panel.init({}, cx);
   panel.monitor = { subscriptions, error: null, generatedAt: DEMO_NOW, fetchedAt: null, close() {} };
-  return { panel, cx, timers, detailHelpers: context.detailHelpers };
+  return { panel, cx, timers, storage, writes, detailHelpers: context.detailHelpers };
 }
 
 test("native demo preserves base windows/resets with one explicit red palette sample", () => {
@@ -237,6 +244,88 @@ test("rail has balanced outer breathing room and explicit gaps without changing 
   assert.equal(wide.attrs.pt[0], 0);
   assert.equal(wide.attrs.pb[0], 8);
 });
+
+const mouse = (y, local = 4, height = 28) => ({ position: { x: 12, y },
+  local_position: { x: 12, y: local }, bounds: { width: 200, height } });
+const rowIds = panel => byID(panel.render(), "quota-list").childNodes
+  .map(popover => popover.attrs.id[0].slice("quota-disclosure-".length));
+
+test("drag sorts rows before and after the target, shows a line, and persists in both sidebar widths", () => {
+  for (const [width, height] of [[268, 28], [44, 34]]) {
+    const { panel, cx, storage, writes } = fixture(width);
+    const [a, b, c, d] = rowIds(panel);
+    const row = id => byID(panel.render(), `quota-${id}`);
+    const drop = (from, to, after) => {
+      row(from).handlers["on_mouse_down:left"](mouse(10), cx);
+      assert.equal(panel.expanded, null);
+      const event = mouse(70, after ? height - 4 : 4, height);
+      row(to).handlers.on_mouse_move(event, cx);
+      const line = byID(row(to), `quota-drop-${to}`);
+      assert.equal(line.attrs[after ? "bottom" : "top"][0], 0);
+      assert.equal(row(from).attrs.opacity[0], 0.5);
+      row(to).handlers["on_mouse_up:left"](event, cx);
+      assert.equal(panel.expanded, null);
+      assert.equal(panel.drag, null);
+      assert.equal(byID(row(to), `quota-drop-${to}`), undefined);
+    };
+    drop(a, d, true);
+    assert.deepEqual(rowIds(panel), [b, c, d, a]);
+    drop(a, c, false);
+    assert.deepEqual(rowIds(panel), [b, a, c, d]);
+    assert.equal(writes.length, 2);
+    assert.deepEqual(rowIds(fixture(width, undefined, {}, storage).panel), [b, a, c, d]);
+  }
+});
+
+test("a click opens or closes the same details without writing a subscription order", () => {
+  const { panel, cx, timers, writes } = fixture();
+  const [id] = rowIds(panel);
+  const row = () => byID(panel.render(), `quota-${id}`);
+  for (const open of [true, false]) {
+    row().handlers["on_mouse_down:left"](mouse(10), cx);
+    assert.equal(panel.expanded, open ? null : id, "the press itself does not toggle details");
+    row().handlers.on_mouse_move(mouse(12), cx);
+    row().handlers["on_mouse_up:left"](mouse(12), cx);
+    timers.at(-1).callback(cx);
+    assert.equal(panel.expanded, open ? id : null);
+    assert.deepEqual(writes, []);
+  }
+});
+
+test("drag cancellation and no-op drops do not write or open details", () => {
+  for (const cancel of ["outside", "gap", "removed-source", "removed-target", "same-position"]) {
+    const { panel, cx, writes } = fixture();
+    const [a, b] = rowIds(panel);
+    const row = id => byID(panel.render(), `quota-${id}`);
+    row(a).handlers["on_mouse_down:left"](mouse(10), cx);
+    row(b).handlers.on_mouse_move(mouse(44), cx);
+    const list = byID(panel.render(), "quota-list"), release = row(b).handlers["on_mouse_up:left"];
+    if (cancel === "outside") list.handlers.on_hover(false, cx);
+    if (cancel === "gap") list.handlers["on_mouse_up:left"](mouse(40), cx);
+    if (cancel === "removed-source" || cancel === "removed-target") {
+      panel.monitor.subscriptions = panel.monitor.subscriptions.filter(s => s.id !== (cancel === "removed-source" ? a : b));
+      panel.render();
+    }
+    release(mouse(44), cx);
+    assert.equal(panel.expanded, null, cancel);
+    assert.equal(panel.drag, null, cancel);
+    assert.deepEqual(writes, [], cancel);
+  }
+});
+
+test("manual order survives missing rows and appends new rows in their service order", () => {
+  const { panel } = fixture();
+  const [a, b, c, d] = rowIds(panel), e = { id: "new-1" }, f = { id: "new-2" };
+  panel.order = order.parseOrder(JSON.stringify([c, d, a, b, null, d, {}, ""]));
+  assert.deepEqual(order.parseOrder("{broken"), []);
+  assert.deepEqual(panel.order, [c, d, a, b]);
+  const withoutD = [...subscriptions.filter(s => s.id !== d), e, f];
+  assert.deepEqual(order.orderedSubscriptions(withoutD, panel.order).map(s => s.id), [c, a, b, e.id, f.id]);
+  const moved = order.moveSubscription(withoutD, panel.order, b, c, false);
+  assert.deepEqual(order.orderedSubscriptions([...subscriptions, e, f], moved).map(s => s.id), [b, d, c, a, e.id, f.id]);
+  assert.deepEqual(subscriptions.map(s => s.id), [a, b, c, d], "monitor snapshot remains unchanged");
+});
+
 test("runtime has one minute polling and no demo dependency or provider collection", () => {
   const source = read("main.js");
   assert.doesNotMatch(source, /demo\.js|DEMO_NOW|ДЕМО|setInterval|setTimeout/);
