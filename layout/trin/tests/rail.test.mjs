@@ -99,6 +99,21 @@ test("Dock badge clears on initial empty snapshot and ignores idle and working",
   assert.equal(badges.at(-1), "1", "blocked counts until resolved even while focused");
 });
 
+test("wide Sessions tints only unread results blue and retains the status dot", () => {
+  const { panel, agents, context, t } = fixture();
+  context.layout = () => ({ id: "sidebar", size: { px: 268 } });
+  const root = panel.render();
+  const done = byID(root, "ag-t3");
+  assert.equal(done.attrs.bg[0], "#3b82f620");
+  const hovered = done.attrs.hover[0](element());
+  assert.equal(hovered.attrs.bg[0], "#3b82f62b");
+  assert.ok(nodes(done).some(n => n.attrs.tooltip?.[0] === "Готово" && n.attrs.bg?.[0] === t.done));
+  assert.equal(byID(root, "ag-t1").attrs.bg[0], t.selected);
+  for (const id of ["ag-t0", "ag-t2"]) assert.equal(byID(root, id).attrs.bg, undefined);
+  agents[3].status = "idle";
+  assert.equal(byID(panel.render(), "ag-t3").attrs.bg, undefined, "reading the result clears the tint");
+});
+
 test("wide Sessions has a compact title, no sorting menu, and preserves default tab order", () => {
   const { panel, agents, context } = fixture();
   context.layout = () => ({ id: "sidebar", size: { px: 268 } });

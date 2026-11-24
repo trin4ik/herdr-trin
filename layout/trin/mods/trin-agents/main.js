@@ -10,6 +10,7 @@ import { parseOrder, orderedSessions, moveSession } from "./order.js";
 
 const ORDER_KEY = "sessions.order";
 const DRAG_THRESHOLD = 4;
+const COMPLETION_BLUE = "#3b82f6";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -194,8 +195,9 @@ export default class Agents extends View {
       const pic = spaceAvatar(spaceOf(a), t);
       const meta = a.background ? a.meta : this.activity?.details(a);
       const backgroundHint = a.background ? `Фоновая сессия · ${a.machine ?? "Этот компьютер"}` : null;
+      const ready = a.status === "done";
       if (collapsed) {
-        const ready = a.status === "done", needsYou = a.status === "blocked";
+        const needsYou = a.status === "blocked";
         const attention = ready || needsYou;
         const signal = needsYou ? t.blocked : t.done;
         const description = [label(a), spaceOf(a).name || a.space_name,
@@ -215,7 +217,7 @@ export default class Agents extends View {
             .when(attention, el => el.bg(signal + "26").border(2).border_color(signal))
             .when(!a.focused && !attention, el => el.hover(s => s.bg(t.hover)))
             .child(pic.size(22).text_size(12).tooltip(description))
-            .child(h_flex().absolute().right(-1).bottom(-1).size(16).rounded(5).bg(ready ? "#3b82f6" : attention ? signal : t.chrome)
+            .child(h_flex().absolute().right(-1).bottom(-1).size(16).rounded(5).bg(ready ? COMPLETION_BLUE : attention ? signal : t.chrome)
               .items_center().justify_center()
               .when(ready, el => el.child(svg("mods/workspace-chrome/check.svg").size(12).text_color(t.chrome)))
               .when(needsYou, el => el.child(div().font_bold().text_size(12).text_color(t.chrome).child("!")))
@@ -233,8 +235,9 @@ export default class Agents extends View {
         .flex_none()
         .rounded(8)
         .gap(4)
-        .when(a.focused, (el) => el.bg(t.selected))
-        .hover(s => s.bg(t.hover))
+        .when(a.focused && !ready, el => el.bg(t.selected))
+        .when(ready, el => el.bg(COMPLETION_BLUE + "20"))
+        .hover(s => s.bg(ready ? COMPLETION_BLUE + "2b" : t.hover))
         .child(h_flex().h(18).min_w(0).gap(7).items_center()
            .child(pic)
           .child(div().h(18).line_height("18px").flex_1().min_w(0).truncate().text_color(idle ? t.muted : t.foreground)
