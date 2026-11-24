@@ -385,8 +385,8 @@ export default class Agents extends View {
         .when(this.rows.length === 0 && !collapsed, el =>
           el.child(div().px(4).text_size(12).text_color(t.muted).child(hidden.length ? "Нет открытых сессий." : "Нет сессий со статусом.")))
         .children(this.rows.map(item => this.sortable(row(item.agent), item, label(item.agent), collapsed, t, focusAgent))))
-      .child(v_flex().id("hidden-sessions").flex_none().min_h(0).max_h(this.hiddenOpen ? "45%" : 30).px(collapsed ? 0 : 8)
-          .child(h_flex().id("hidden-sessions-toggle").h(30).px(collapsed ? 2 : 6).gap(4).items_center()
+      .when(hidden.length > 0, el => el.child(v_flex().id("hidden-sessions").w_full().flex_none().min_h(0).max_h(this.hiddenOpen ? "45%" : 30)
+          .child(h_flex().id("hidden-sessions-toggle").w_full().h(30).px(collapsed ? 2 : 14).gap(4).items_center()
             .flex_none().when(collapsed, h => h.justify_center()).border_t(1).border_color(t.border)
             .text_color(t.muted).text_size(11).cursor_pointer().hover(h => h.bg(t.hover))
             .tooltip(`Скрытые сессии: ${hidden.length}`).accessibility_label(`Скрытые сессии: ${hidden.length}`)
@@ -397,12 +397,10 @@ export default class Agents extends View {
             })
             .child(svg(`mods/workspace-chrome/chevron-${this.hiddenOpen ? "down" : "right"}.svg`).size(11).flex_none())
             .when(!collapsed, h => h.child(div().flex_1().truncate().child("Скрытые")))
-            .child(div().text_color(t.muted).child(String(hidden.length))))
-          .when(Boolean(this.hiddenOpen), el => el.child(v_flex().id("hidden-sessions-list").min_h(0).overflow_y_scrollbar()
-            .when(hidden.length === 0, list => list.child(div().px(6).py(6).text_size(11).text_color(t.muted)
-              .when(collapsed, item => item.tooltip("Нет скрытых сессий")).child(collapsed ? "—" : "Нет скрытых сессий.")))
+            .child(div().child(String(hidden.length))))
+          .when(Boolean(this.hiddenOpen), section => section.child(v_flex().id("hidden-sessions-list").min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar()
             .children(hidden.map(({ agent }) => row(agent).cursor_pointer()
-              .accessibility_label(`Вернуть: ${label(agent)}`).on_click((_e, cx) => focusAgent(agent, cx)))))))
+              .accessibility_label(`Вернуть: ${label(agent)}`).on_click((_e, cx) => focusAgent(agent, cx))))))))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

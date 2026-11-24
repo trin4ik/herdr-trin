@@ -216,23 +216,28 @@ test("working hidden tabs live below the folded section and return to the main l
   job.status = "done";
   root = panel.render();
   assert.ok(byID(root, "ag-t0"));
-  assert.match(byID(root, "hidden-sessions-toggle").attrs.tooltip[0], /: 0$/);
-  assert.equal(byID(byID(root, "hidden-sessions"), "ag-t0"), undefined);
+  assert.equal(byID(root, "hidden-sessions"), undefined);
 });
 
-test("the empty Hidden toggle remains outside the scrolling main list in either sidebar width", () => {
-  const { panel, context } = fixture();
+test("Hidden appears below the scrolling list only when populated, with an edge-to-edge divider", () => {
+  const { panel, context, agents, spaces } = fixture();
+  const tab = { id: "hidden", settled: false };
+  spaces[0].tabs.push(tab);
+  agents[0].tab = tab.id;
   for (const width of [44, 268]) {
-    panel.hiddenOpen = false;
     context.layout = () => ({ id: "sidebar", size: { px: width } });
+    tab.settled = false;
+    assert.equal(byID(panel.render(), "hidden-sessions"), undefined);
+    tab.settled = true;
     const root = panel.render();
-    assert.equal(byID(byID(root, "ag-list"), "hidden-sessions-toggle"), undefined);
-    const toggle = byID(root, "hidden-sessions-toggle");
-    assert.match(toggle.attrs.tooltip[0], /: 0$/);
-    toggle.handlers.on_click({}, cx);
-    const list = byID(panel.render(), "hidden-sessions-list");
-    assert.ok(list);
-    if (width === 268) assert.equal(text(list), "Нет скрытых сессий.");
+    const section = byID(root, "hidden-sessions");
+    assert.equal(root.childNodes[root.childNodes.indexOf(byID(root, "ag-list")) + 1], section);
+    assert.equal(section.attrs.px, undefined, "section does not inset the full-width divider");
+    const toggle = byID(section, "hidden-sessions-toggle");
+    assert.ok(toggle.attrs.w_full);
+    assert.equal(toggle.attrs.border_t[0], 1);
+    assert.equal(toggle.attrs.px[0], width === 44 ? 2 : 14);
+    assert.match(toggle.attrs.tooltip[0], /: 1$/);
   }
 });
 
