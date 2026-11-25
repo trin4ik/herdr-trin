@@ -95,7 +95,8 @@ shared API вне репозитория. `trin-quotas.reset-endpoint` возв�
 - Разработка: Git, Node для JS-тестов, Go и Python. SSH нужен только opt-in
   remote diagnostics; они не выполняются при установке или запуске тестового suite.
 
-Runtime-команды активных модов ограничены штатными `herdr-app`, `curl`, `python3`;
+Активные моды используют штатные `herdr-app`, `curl`, `python3` и `/bin/mv`
+(для замены локальной копии иконки проекта);
 старый неподключённый Spaces использует стандартные Git и Herdr core `hc`. Пользовательских wrapper CLI,
 локальных task runners и приватных путей к инструментам нет.
 

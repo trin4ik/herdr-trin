@@ -83,6 +83,58 @@ class ActivityTests(unittest.TestCase):
     def test_main_session_is_not_a_subagent(self):
         self.assertEqual(self.result(FakeAPI([session("root")], ["root"]))["subagents"], 0)
 
+    def test_explicit_server_resume_only_verifies_the_registered_endpoint_and_exact_id(self):
+        api = FakeAPI([session("ses_resume", "Different terminal caption")])
+        api.url = "http://127.0.0.1:1234"
+        for server, confirmed in [(api.url + "/", True), ("http://127.0.0.1:4321", False),
+                                  (api.url + "/other", False), (api.url + "?secret=value", False),
+                                  ("http://user:pass@127.0.0.1:1234", False)]:
+            with self.subTest(confirmed=confirmed, server=server):
+                target = {**TARGET, "resumeProbe": {"server": server, "id": "ses_resume"}}
+                info = activity.collect_panel(api, [target])[0]["t1"]
+                self.assertEqual(info.get("resumeVerified", False), confirmed)
+                self.assertEqual(info.get("sessionID"), "ses_resume" if confirmed else None)
+                self.assertNotIn(server, json.dumps(info))
+
+    def test_verified_server_without_an_id_reads_metrics_and_follows_rename_without_matching_other_servers(self):
+        s = session("ses_known")
+        s["model"] = {"id": "fixture-model", "providerID": "fixture-provider"}
+
+        class RenameAPI(FakeAPI):
+            def get(self, path, **query):
+                if path.endswith("/message") or path == "/api/model":
+                    return {"data": []}
+                return super().get(path, **query)
+
+        api = RenameAPI([s])
+        api.url = "http://127.0.0.1:1234"
+        target = {**TARGET, "resumeProbe": {"server": api.url}}
+        info = activity.collect_panel(api, [target])[0]["t1"]
+        self.assertEqual(info["sessionID"], s["id"])
+        self.assertEqual(info["meta"]["modelID"], "fixture-model")
+        self.assertTrue(info["resumeVerified"])
+        target["presentationID"] = s["id"]
+        s["title"] = "Renamed"
+        info = activity.collect_panel(api, [target])[0]["t1"]
+        self.assertEqual(info["sessionTitle"], "Renamed")
+        self.assertEqual(info["meta"]["durationMs"], 0)
+        api.sessions["ses_other"] = session("ses_other", "Task")
+        self.assertTrue(activity.collect_panel(api, [target])[0]["t1"]["matchMissing"])
+        target["resumeProbe"] = {"server": "http://127.0.0.1:5678"}
+        self.assertFalse(activity.collect_panel(api, [target])[0]["t1"]["resumeVerified"])
+
+    def test_unchanged_directory_disambiguation_survives_the_next_lookup_with_a_hint(self):
+        left = session("ses_a", directory="/a")
+        right = session("ses_b", directory="/b")
+        api = FakeAPI([left, right])
+        target = {**TARGET, "cwd": "/a"}
+        self.assertEqual(activity.match_session(api, target)["id"], "ses_a")
+        target["presentationID"] = "ses_a"
+        self.assertEqual(activity.match_session(api, target)["id"], "ses_a")
+        self.assertIsNone(activity.match_session(api, {**target, "cwd": "/b"}))
+        api.sessions["ses_conflict"] = session("ses_conflict", directory="/a")
+        self.assertIsNone(activity.match_session(api, target))
+
     def test_panel_discovers_active_root_and_excludes_old_idle_children_and_archived(self):
         root = session("ses_root", "Real background")
         archived = {**session("ses_test"), "time": {"archived": 1000}}
@@ -198,6 +250,15 @@ class ActivityTests(unittest.TestCase):
 
     def test_unique_title_survives_a_changed_location(self):
         self.assertEqual(self.result(FakeAPI([session("root", directory="/moved")]))["sessionID"], "root")
+
+    def test_bound_session_directory_comes_from_session_not_terminal_cwd(self):
+        api = FakeAPI([session("ses_portal", "Portal", directory="/home")])
+        targets = [{**TARGET, "address": address, "cwd": cwd, "sessionID": "ses_portal"}
+                   for address, cwd in [("first", "/home"), ("second", "/another")]]
+        data = activity.collect(api, targets)
+        for info in data.values():
+            self.assertEqual((info["sessionID"], info["sessionTitle"], info["sessionFolder"]),
+                             ("ses_portal", "Portal", "/home"))
 
     def test_terminal_session_id_disambiguates(self):
         api = FakeAPI([session("one"), session("two")])

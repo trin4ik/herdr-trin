@@ -35,6 +35,8 @@ function fixture(initial = state(), initialSpaces = [s()]) {
   let ms = [{ name: null, layout: "ready" }, { name: "remote", layout: "ready" }];
   const calls = [], overlays = [], notices = [], sharedValues = {}, tree = { id: "root", children: [{ id: "project-workspace", active: "main" }, { id: "panel", hidden: true }] };
   const context = { ...data, ...native, View: class {}, div: element, svg: element, h_flex: element, v_flex: element,
+    checking: () => true, image: path => element().asset(path),
+    projectIcon: p => sharedValues["trin.project-icons.ready"]?.[JSON.stringify([p.machine ?? null, p.folder])],
     seeds: {}, shared: key => key === KEY ? saved : sharedValues[key], setShared: (key, value) => { sharedValues[key] = value; }, read: () => saved, write: next => { saved = next; },
     props: () => ({}), spaces: () => sp, machines: () => ms, agents: () => [], focused: () => focus,
     theme: () => ({ foreground: "#ffffff", muted: "#999999", dim: "#777777" }), layout: () => tree,
@@ -467,7 +469,10 @@ test("all project hotkeys are scoped to trin and cover empty-context safety", ()
   assert.deepEqual(Object.keys(keys), ["layout:trin"]);
   assert.equal(keys["layout:trin"]["cmd-shift-t"], "trin-projects.new-terminal");
   assert.equal(keys["layout:trin"]["cmd-w"], "trin-tabs.close-current");
-  for (const key of ["cmd-t", "cmd-shift-w", "cmd-d", "cmd-shift-d", "ctrl-tab", "cmd-1", "ctrl-1", "cmd-p"]) assert.match(keys["layout:trin"][key], /^trin-projects\./);
+  for (const key of ["cmd-t", "cmd-shift-w", "cmd-d", "cmd-shift-d", "ctrl-1", "cmd-p"]) assert.match(keys["layout:trin"][key], /^trin-projects\./);
+  for (const key of ["ctrl-tab", "cmd-shift-]"]) assert.equal(keys["layout:trin"][key], "trin-tabs.tab-next");
+  for (const key of ["ctrl-shift-tab", "cmd-shift-["]) assert.equal(keys["layout:trin"][key], "trin-tabs.tab-prev");
+  for (let i = 1; i <= 9; i++) assert.equal(keys["layout:trin"][`cmd-${i}`], `trin-tabs.tab-index--${i}`);
   const layout = JSON.parse(fs.readFileSync(new URL("../layouts/trin.json", import.meta.url), "utf8"));
   const walk = n => [n, ...(n.children ?? []).flatMap(walk)];
   assert.equal(walk(layout).find(n => n.id === "status").content.props.surface, "status");

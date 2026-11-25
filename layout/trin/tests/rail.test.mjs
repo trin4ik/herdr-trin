@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -42,11 +43,12 @@ function fixture(storage = {}) {
   }));
   const commands = [], badges = [], stored = {};
   const t = { accent: "#8ab4f8", chrome: "#101112", selected: "#25272b", muted: "#999999", dim: "#777777", idle: "#777777", working: "#d9bc65", blocked: "#e09080", done: "#8cb383" };
-  const context = { View: class {}, div: element, svg: path => element().asset(path), h_flex: element, v_flex: element,
+  const context = { createHash, View: class {}, div: element, svg: path => element().asset(path),
+    image: path => element().imagePath(path), h_flex: element, v_flex: element,
     Date: { now: () => now },
     formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "",
     theme: () => t, layout: () => ({ id: "sidebar", size: { px: 44 } }),
-    spaces: () => spaces, agents: () => agents, terminals: () => agents,
+    spaces: () => spaces, agents: () => agents, panes: () => agents.map(a => ({ ...a, terminal: a.address })), terminals: () => agents,
     shared: key => stored[key], setShared: (key, value) => { stored[key] = value; },
     focused: () => ({ agent: "t1" }), setAgentOrder: order => { context.order = order; },
     setBadge: text => badges.push(text),
@@ -55,17 +57,19 @@ function fixture(storage = {}) {
     run: (name, args) => commands.push({ name, args }),
   };
   vm.runInNewContext(read("trin-agents/order.js") + "\n" + read("trin-agents/appearance.js") + "\n"
-    + read("trin-agents/activity.js") + "\n" + read("trin-agents/background.js") + "\n" + read("trin-agents/main.js")
-    + "\nthis.AgentsPanel = Agents;", context);
+    + ["identity", "activity", "background", "opening", "main"].map(name => read(`trin-agents/${name}.js`)).join("\n")
+    + "\nthis.AgentsPanel = Agents; this.readTerminalSessionID = terminalSessionID;", context);
   const panel = new context.AgentsPanel();
   Object.assign(panel, { order: JSON.parse(storage["sessions.order"] ?? storage.pins ?? "[]"), clock: { sync() {}, value: () => null },
-    activity: { details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
+    activity: { boundSessionID: (_agent, terminal) => context.readTerminalSessionID(terminal),
+      details: () => ({ providerID: "openai", modelID: "gpt-test", variant: "medium" }), get: () => null, notice: () => null, close() {} } });
   return { panel, commands, badges, agents, context, t, spaces, storage, advance: ms => { now += ms; } };
 }
 
 test("Dock badge sums live blocked and unseen done sessions reactively across projects", () => {
   const { panel, agents, badges, context } = fixture();
   agents[3].space = "remote/other-project";
+  agents[3].tab = "remote/other-tab";
   panel.render();
   assert.deepEqual(badges, ["2"]);
   panel.render();
@@ -99,6 +103,19 @@ test("Dock badge clears on initial empty snapshot and ignores idle and working",
   assert.deepEqual(badges, [null]);
   panel.updateBadge([{ address: "waiting", status: "blocked", focused: true }]);
   assert.equal(badges.at(-1), "1", "blocked counts until resolved even while focused");
+});
+
+test("session avatar uses the project machine and configured folder and falls back to a letter", () => {
+  const { panel, context, spaces } = fixture();
+  spaces[0].folder = "/old";
+  context.setShared("trin.projects.v1", { projects: [{ id: "P", space: "s", name: "Project", machine: "server", folder: "/repo" }] });
+  const key = JSON.stringify(["server", "/repo"]), icon = `data/trin-project-icons/${"a".repeat(64)}.png`;
+  context.setShared("trin.project-icons.ready", { [key]: icon });
+  assert.ok(nodes(byID(panel.render(), "ag-t0")).some(e => e.attrs.imagePath?.[0] === icon));
+  context.setShared("trin.project-icons.ready", { [key]: "../../invalid.png" });
+  const row = byID(panel.render(), "ag-t0");
+  assert.ok(!nodes(row).some(e => e.attrs.imagePath));
+  assert.ok(text(row).includes("P"));
 });
 
 test("wide Sessions tints only unread results blue and retains the status dot", () => {
@@ -198,6 +215,160 @@ test("clicking a background session resumes its existing ID on its owning machin
   assert.equal(commands[0].args.id, "resumed");
 });
 
+test("a completed remote row yields to its opening tab, even if the background snapshot keeps it", async () => {
+  const { panel, agents, spaces, context, commands, advance } = fixture();
+  const remote = { id: "r", name: "Remote", folder: "/fixture", machine: "server", tabs: [] };
+  spaces.push(remote);
+  context.machines = () => [{ name: "server", layout: "ready" }];
+  let acknowledge;
+  const reply = new Promise(resolve => { acknowledge = resolve; });
+  let launches = 0;
+  context.exec = () => { launches++; return reply; };
+  const jobs = [], launchCtx = { ...cx, spawn: fn => jobs.push(fn(launchCtx)) };
+  const task = { address: "opencode-session:server/ses_result", sessionID: "ses_result", title: "Result",
+    folder: "/fixture", machine: "server", background: true, status: "done" };
+  const local = { ...task, machine: null, address: "opencode-session:/ses_result" };
+  panel.activity.backgroundRows = () => [task, local];
+  panel.render();
+  advance(1000);
+  const stale = byID(panel.render(), `ag-${task.address}`);
+  assert.ok(stale);
+  click(stale, launchCtx);
+  panel.openBackground(task, launchCtx);
+  assert.equal(launches, 1);
+  acknowledge({ code: 0, stdout: '{"space":"r","tab":"remote-tab","terminal":"remote-terminal"}' });
+  await Promise.all(jobs);
+  remote.tabs.push({ id: "remote-tab" });
+  panel.render();
+  panel.openBackground(task, launchCtx);
+  const opened = { ...agents[1], address: "remote-terminal", pane: "remote-pane", space: "r", tab: "remote-tab",
+    app: "opencode", title: task.title };
+  agents.push(opened);
+  let root = panel.render();
+  assert.ok(byID(root, "ag-remote-terminal"));
+  assert.ok(!byID(root, `ag-${task.address}`), "acknowledged terminal suppresses the launch-gap duplicate");
+  assert.ok(byID(root, `ag-${local.address}`), "same ID on another machine stays independent");
+  advance(16000);
+  assert.ok(!byID(panel.render(), `ag-${task.address}`), "slow confirmation does not add a duplicate");
+  panel.openBackground(task, launchCtx);
+  assert.equal(launches, 1, "a visible tab does not unlock when confirmation is slow");
+  assert.equal(commands.at(-1).args.id, "remote-tab");
+  opened.report = { app: "opencode", state: "idle", title: task.title };
+  opened.records = { ses_result: opened.report };
+  panel.render();
+  advance(16000);
+  root = panel.render();
+  assert.ok(!byID(root, `ag-${task.address}`));
+  click(stale, launchCtx);
+  assert.equal(commands.at(-1).args.pane, "remote-pane");
+  assert.equal(launches, 1);
+});
+
+test("background click reads new attachments before render, and late acknowledgement preserves project choice", async () => {
+  const { panel, agents, spaces, context, commands } = fixture();
+  const remote = { id: "other", machine: "peer", folder: "/other", active: true, tabs: [{ id: "open" }] };
+  spaces.push(remote);
+  context.machines = () => [{ name: "peer", layout: "ready" }];
+  const registry = { selected: "other", projects: [{ id: "other", space: "other", machine: "peer", folder: "/other" }] };
+  context.setShared("trin.projects.v1", registry);
+  const task = { address: "opencode-session:peer/ses_remote", machine: "peer", sessionID: "ses_remote", folder: "/home" };
+  const report = { state: "working", title: "Job", app: "opencode" };
+  agents.push({ ...agents[0], address: "new", pane: "new-pane", space: "other", tab: "open", report, records: { ses_remote: report } });
+  panel.openBackground(task, cx);
+  assert.equal(commands.at(-1).args.pane, "new-pane");
+  agents.pop();
+  const jobs = [], calls = [];
+  let reply;
+  context.exec = (_file, [, cmd, args]) => { calls.push([cmd, JSON.parse(args)]); return new Promise(resolve => { reply = resolve; }); };
+  const ctx = { ...cx, spawn: fn => jobs.push(fn(ctx)) };
+  panel.openBackground(task, ctx);
+  assert.equal(calls[0][0], "space.new"); assert.equal(calls[0][1].folder, "/home");
+  context.setShared("trin.projects.v1", { ...registry, selected: "elsewhere" });
+  reply({ code: 0, stdout: '{"space":"home","tab":"new-tab"}' }); await Promise.all(jobs);
+  assert.equal(commands.length, 1);
+  assert.equal(context.shared("trin.projects.v1").selected, "elsewhere");
+});
+
+test("closing the unconfirmed terminal unlocks a new launch even if a shell keeps the tab open", async () => {
+  const { panel, context, spaces, agents } = fixture();
+  const remote = { id: "r", name: "Remote", folder: "/fixture", machine: "server", tabs: [] };
+  spaces.push(remote);
+  context.machines = () => [{ name: "server", layout: "ready" }];
+  let launches = 0;
+  context.exec = async () => {
+    launches++;
+    return { code: 0, stdout: '{"space":"r","tab":"r-tab","terminal":"r-term"}' };
+  };
+  const jobs = [], launchCtx = { ...cx, spawn: fn => jobs.push(fn(launchCtx)) };
+  const task = { address: "opencode-session:server/ses_result", sessionID: "ses_result", folder: "/fixture", machine: "server" };
+  panel.openBackground(task, launchCtx);
+  await Promise.all(jobs);
+  remote.tabs.push({ id: "r-tab" });
+  agents.push({ ...agents[1], address: "r-shell", space: "r", tab: "r-tab", app: "shell" });
+  agents.push({ ...agents[1], address: "r-term", space: "r", tab: "r-tab", app: "opencode" });
+  panel.render();
+  agents.pop();
+  panel.render();
+  panel.openBackground(task, launchCtx);
+  await Promise.all(jobs);
+  assert.equal(launches, 2);
+});
+
+for (const program of [{ shell: true }, { key: "codex", agent: true }]) {
+  test(`opening lock survives independent pane/terminal gaps, releases on verified ${program.key ?? "shell"} replacement`, () => {
+    const { context } = fixture();
+    const opens = vm.runInNewContext("new BackgroundOpens()", context), ticket = opens.begin("session");
+    opens.acknowledge(ticket, { tab: "tab", terminal: "term" }, 0);
+    const original = { foreground: { pid: 71 }, program: { key: "opencode", agent: true } };
+    const live = new Map([["term", original]]);
+    const state = (present, owner, now, pane = true) => opens.reconcile(new Map(present ? [["tab", {}]] : []), new Map(),
+      new Map(owner ? [["tab", [{ address: "term" }]]] : []), live, now, pane ? [{ tab: "tab", pane: "p", terminal: "term" }] : []);
+    assert.ok(state(true, true, 1).claimed.has("session"));
+    assert.ok(state(false, false, 17000, false).claimed.has("session")); assert.equal(opens.begin("session"), null);
+    live.delete("term");
+    assert.ok(state(true, false, 17500).claimed.has("session")); assert.equal(opens.begin("session"), null);
+    live.set("term", original); assert.ok(state(true, true, 18000).claimed.has("session"));
+    live.set("term", { foreground: { pid: 72 }, program: { key: "program" } });
+    assert.ok(state(true, false, 18500).claimed.has("session"), "new PID alone is not a different app");
+    live.set("term", { foreground: { pid: 72 }, program });
+    assert.ok(!state(true, false, 19000).claimed.has("session")); assert.ok(opens.begin("session"));
+  });
+}
+
+test("a created tab without its acknowledged terminal unlocks after the startup deadline", async () => {
+  const { panel, spaces, agents, context, advance } = fixture();
+  const remote = { id: "r", name: "Remote", folder: "/fixture", machine: "server", tabs: [] };
+  spaces.push(remote);
+  context.machines = () => [{ name: "server", layout: "ready" }];
+  let launches = 0;
+  context.exec = async () => {
+    launches++;
+    return { code: 0, stdout: '{"space":"r","tab":"r-tab","terminal":"never-appears"}' };
+  };
+  const jobs = [];
+  let wake;
+  const launchCtx = { ...cx, spawn: fn => jobs.push(fn(launchCtx)), timer: { after(ms, fn) {
+    wake = { ms, fn, cancel() {} };
+    return wake;
+  } } };
+  const task = { address: "opencode-session:server/ses_result", sessionID: "ses_result", folder: "/fixture", machine: "server" };
+  panel.openBackground(task, launchCtx);
+  await Promise.all(jobs);
+  remote.tabs.push({ id: "r-tab" });
+  agents.push({ ...agents[1], address: "r-shell", space: "r", tab: "r-tab", app: "shell" });
+  panel.live = false;
+  panel.render(launchCtx);
+  assert.equal(wake.ms, 15000);
+  panel.openBackground(task, launchCtx);
+  assert.equal(launches, 1);
+  advance(wake.ms);
+  wake.fn(launchCtx);
+  panel.render(launchCtx);
+  panel.openBackground(task, launchCtx);
+  await Promise.all(jobs);
+  assert.equal(launches, 2);
+});
+
 test("working hidden tabs live below the folded section and return to the main list on a result", () => {
   const { panel, commands, agents, spaces } = fixture();
   spaces[0].tabs.push({ id: "hidden", name: "Hidden job", named: true, settled: true });
@@ -252,9 +423,14 @@ test("Hidden appears below the scrolling list only when populated, with an edge-
 });
 
 test("the expanded section caps its viewport without dropping any hidden row", () => {
-  const { panel, spaces } = fixture();
+  const { panel, spaces, context } = fixture();
   panel.hiddenOpen = true;
-  for (let n = 1; n <= 6; n++) spaces[0].tabs.push({ id: `hidden${n}`, settled: true });
+  const ps = [];
+  context.panes = () => ps;
+  for (let n = 1; n <= 6; n++) {
+    spaces[0].tabs.push({ id: `hidden${n}`, settled: true, panes: 1 });
+    ps.push({ tab: `hidden${n}`, pane: `mod${n}`, mod: "fixture" });
+  }
   const section = byID(panel.render(), "hidden-sessions");
   const list = byID(section, "hidden-sessions-list");
   assert.equal(section.attrs.h[0], 30 + 3 * 41);
@@ -345,6 +521,116 @@ test("live terminal IDs merge immediately, even with different titles; different
   panel.render();
   advance(1000);
   assert.ok(sessionRows(panel).includes(job.address), "switching IDs releases the previous session");
+});
+
+test("project selection, settle and restoration use the home client, never the duplicate's native caption", () => {
+  const { panel, spaces, agents, context, commands } = fixture();
+  const project = (id, tabs) => ({ id, machine: "remote", folder: "/" + id, tabs });
+  const tab = (id, name, active) => ({ id, name, named: true, active, panes: 1, status: "working" });
+  const home = project("home", [tab("a", "Old native home caption", true)]);
+  const other = project("other", [tab("c", "Tools", false), tab("b", "Tools", true), tab("d", "Third", false)]);
+  spaces.splice(0, spaces.length, home, other);
+  const registry = { selected: "other", projects: spaces.map(s => ({ ...s, space: s.id })) };
+  context.setShared("trin.projects.v1", registry);
+  other.active = true;
+  const client = (n, space, tab, id, title) => {
+    const report = { app: "opencode", state: "working", title };
+    return { address: "t" + n, pane: "p" + n, pid: n, created_ms: n, space, tab, title, report,
+      program: { key: "opencode", name: "OpenCode", agent: true }, records: { [id]: report }, status: "working" };
+  };
+  const a = client(1, "home", "a", "ses_portal", "Portal");
+  const b = client(2, "other", "b", "ses_portal", "Portal");
+  const c = client(3, "other", "c", "ses_tools", "Tools");
+  b.focused = true;
+  agents.splice(0, agents.length, b, c, a);
+  const ts = [a, b, c]; let missingPane, missingTerminal;
+  const extra = [];
+  context.terminals = () => ts.filter(t => t !== missingTerminal);
+  context.machines = () => []; // Native snapshots only; no background service calls.
+  context.panes = () => [...ts.filter(t => t.pane !== missingPane).map(t => ({ ...t, terminal: t.address })), ...extra];
+  // Apply the actual commands emitted by both views to native state.
+  const select = (s, t) => {
+    spaces.forEach(x => { x.active = x === s; }); s.tabs.forEach(x => { x.active = x === t; }); t.settled = false;
+  };
+  context.run = (name, args) => {
+    commands.push({ name, args });
+    for (const s of spaces) for (const t of s.tabs) {
+      if (name === "tab.select" && args.id === t.id) select(s, t);
+      if (name === "tab.settle" && args.id === t.id) t.settled = true;
+      if (name === "pane.focus" && context.panes().some(p => p.pane === args.pane && p.tab === t.id)) select(s, t);
+    }
+  };
+  const monitor = vm.runInNewContext("new ActivityMonitor()", context);
+  panel.activity = monitor;
+  panel.hiddenOpen = panel.live = true;
+  monitor.session = (t, id) => id === "ses_portal" && t.address === b.address ? { sessionFolder: "/home", sessionTitle: "Portal" }
+    : id === "ses_tools" ? { sessionFolder: "/other", sessionTitle: "Tools" } : null;
+  const meta = { providerID: "fixture", modelID: "portal-model", durationMs: 12345, durationReady: true };
+  monitor.details = (t, id) => t.address === b.address && id === "ses_portal" ? meta : null;
+  panel.clock.sync = (roots, details) => {
+    if (!missingTerminal && roots.some(t => t.address === a.address) && monitor.bindings.get(a.address)?.id === "ses_portal"
+      && monitor.bindings.get(b.address)?.id === "ses_portal" && !Object.keys(b.records).includes("ses_tools")) {
+      assert.equal(details(a)?.durationMs, 12345);
+    }
+  };
+  const tabsContext = { ...context, props: () => ({}), settings: () => ({ zoom: 1 }) };
+  vm.runInNewContext(read("trin-tabs/projection.js") + "\n" + read("trin-tabs/main.js") + "\nthis.TabView = Tabs;", tabsContext);
+  const strip = new tabsContext.TabView(); strip.panels = {};
+  let root = panel.render();
+  assert.ok(byID(root, "ag-t1")); assert.ok(byID(root, "ag-t3")); assert.ok(!byID(root, "ag-t2"));
+  const bar = strip.render();
+  assert.ok(!byID(bar, "tab-b")); assert.ok(byID(bar, "tab-c"));
+  const active = () => spaces.find(s => s.active).tabs.find(t => t.active)?.id;
+  assert.equal(active(), "c");
+  strip.navigate("tab-next"); assert.equal(active(), "d"); strip.navigate("tab-prev"); assert.equal(active(), "c");
+  strip.navigate("tab-prev"); assert.equal(active(), "d"); strip.navigate("tab-next"); assert.equal(active(), "c");
+  strip.navigate("tab-index--2"); assert.equal(active(), "d"); strip.navigate("tab-index--3"); assert.equal(active(), "d");
+  byID(strip.render(), "tabs-root").handlers.on_scroll_wheel({ delta: { y: 2 } }); assert.equal(active(), "c");
+  // Actual split snapshot, not just a claimed pane count.
+  extra.push({ tab: "b", pane: "shell-pane", terminal: "shell", program: { shell: true } });
+  other.tabs[1].panes = 2; assert.ok(byID(strip.render(), "tab-b")); extra.pop(); other.tabs[1].panes = 1;
+  a.pid++; assert.ok(byID(strip.render(), "tab-b")); a.pid--;
+  // The remote client restarts under the default service. The old native
+  // report survives the process switch; repaint BOTH views before asserting.
+  missingTerminal = b;
+  root = panel.render(cx); // Runs refresh/prune with the exact pane and agent still present.
+  assert.ok(!byID(root, "ag-t2")); assert.equal(context.shared("trin.sessions.titles").t2, undefined);
+  assert.ok(byID(strip.render(), "tab-b"));
+  missingTerminal = null;
+  b.foreground = { pid: b.pid + 100, argv: ["opencode", "--auto"] };
+  assert.ok(byID(strip.render(), "tab-b"));
+  root = panel.render(cx); assert.ok(byID(root, "ag-t2")); assert.ok(byID(strip.render(), "tab-b"));
+  root = panel.render(cx); assert.ok(byID(root, "ag-t2")); assert.ok(byID(strip.render(), "tab-b"));
+  b.report = { ...b.report, title: "Updated Portal report" }; b.records = { ses_portal: b.report };
+  panel.render(); assert.ok(!byID(strip.render(), "tab-b"), "fresh report confirms new process");
+  const count = commands.length; strip.closeOrHide("b"); assert.equal(commands.length, count);
+  // The home project's real × must settle the home tab only. Restore from
+  // the other project while agents() is incomplete, then render both views.
+  const chooseProject = s => { context.setShared("trin.projects.v1", { ...registry, selected: s.id }); spaces.forEach(x => { x.active = x === s; }); };
+  chooseProject(home);
+  byID(strip.render(), "close-a").handlers.on_click({}, cx);
+  assert.equal(commands.at(-1).name, "tab.settle"); assert.equal(commands.at(-1).args.id, "a");
+  assert.ok(home.tabs[0].settled); assert.equal(other.tabs[1].settled, undefined);
+  chooseProject(other); agents.splice(0, agents.length, c);
+  root = panel.render();
+  const hidden = byID(root, "hidden-sessions-list"); assert.equal(hidden.childNodes.length, 1);
+  const restore = byID(hidden, "ag-t1"); assert.match(restore.attrs.tooltip[0], /Portal/); assert.match(restore.attrs.tooltip[0], /portal-model/);
+  agents.push(a); missingPane = a.pane;
+  const before = commands.length; restore.handlers.on_click({}, cx); assert.equal(commands.length, before);
+  assert.equal(context.shared("trin.projects.v1").selected, "other"); missingPane = null;
+  restore.handlers.on_click({}, cx); assert.equal(context.shared("trin.projects.v1").selected, "home");
+  assert.equal(commands.at(-1).args.pane, "p1"); assert.equal(active(), "a");
+  assert.match(text(byID(strip.render(), "tab-a")), /Portal/); assert.ok(!byID(panel.render(), "hidden-sessions"));
+  chooseProject(other); assert.ok(byID(strip.render(), "tab-c"));
+  // Both previously bound clients idle, no records and no launch ID.
+  for (const t of [a, b]) { t.records = {}; t.report = { ...t.report, state: "idle" }; t.status = "idle"; }
+  panel.render(); assert.ok(!byID(strip.render(), "tab-b"));
+  b.status = "working"; assert.ok(byID(strip.render(), "tab-b"), "working retained caption never hides a tab");
+  b.status = "idle"; b.records = { ses_tools: { ...b.report, title: "different native record" } };
+  assert.ok(byID(strip.render(), "tab-b"), "contradictory record invalidates old association even before publish");
+  root = panel.render(); assert.ok(byID(root, "ag-t2")); assert.ok(!context.shared("trin.sessions.titles").t2?.mirrorOf);
+  assert.ok(byID(root, "ag-t3"), "genuine Tools is independent");
+
 });
 
 test("first-message race: a terminal that reports its ID within the ownership grace has no second row", () => {
@@ -463,6 +749,23 @@ test("a one-shot redraw releases genuine background rows in the narrow panel wit
   assert.equal(scheduled.at(-1).cancelled, true);
 });
 
+test("a display-only title does not claim a background row or become an identity", () => {
+  const { panel, agents, context, advance } = fixture();
+  agents[0].title = "Old terminal caption";
+  agents[0].pid = 42;
+  agents[0].created_ms = 100;
+  panel.activity.presentation = agent => agent.address === "t0" ? { sessionTitle: "Renamed", sessionID: "ses_display" } : null;
+  panel.activity.backgroundRows = () => [{ address: "opencode-session:/ses_display", sessionID: "ses_display",
+    status: "done", background: true }];
+  panel.live = true;
+  panel.render();
+  advance(1000);
+  assert.ok(byID(panel.render(), "ag-opencode-session:/ses_display"));
+  const info = context.shared("trin.sessions.titles").t0;
+  assert.equal(info.title, "Renamed");
+  assert.equal(info.presentationOnly, true);
+});
+
 test("the session list shares the current OpenCode title by terminal and session ID", () => {
   const { panel, agents, context, spaces } = fixture();
   panel.live = true;
@@ -544,76 +847,43 @@ test("expanding the sidebar from the Agents rail preserves the quota height", ()
   ]);
 });
 
-test("Agents falls back to the existing provider assets or initial for unknown families", () => {
-  const context = { div: element, svg: path => element().asset(path), h_flex: element,
-    formatTokens: () => "", formatActiveTime: () => "", modelLabel: () => "model", contextTooltip: () => "" };
-  vm.runInNewContext(read("trin-agents/appearance.js") + "\nthis.details = sessionDetails;", context);
-  const quotaContext = { ...context, View: class {} };
+test("Quotas still shows the existing provider marks", () => {
+  const quotaContext = { div: element, svg: path => element().asset(path), h_flex: element, View: class {} };
   vm.runInNewContext(read("trin-quotas/main.js") + "\nthis.QuotasPanel = Quotas;", quotaContext);
   const quotaPanel = new quotaContext.QuotasPanel();
   for (const provider of ["openai", "anthropic", "ollama", "kimi", "opencode", "google"]) {
-    const root = context.details({ muted: "muted" }, { providerID: provider }, null, null, "test");
-    const icon = nodes(root).find(n => n.attrs.asset);
     const path = provider === "google" ? "mods/trin-agents/model-google.svg"
       : `assets/trin-providers/${provider === "opencode" ? "opencode-logo" : provider}.svg`;
-    assert.equal(icon.attrs.asset[0], path);
-    assert.equal(icon.attrs.text_color[0], "muted");
     const quotaIcon = nodes(quotaPanel.mark({ provider, name: provider }, { muted: "muted" })).find(n => n.attrs.asset);
     assert.equal(quotaIcon?.attrs.asset[0], path, provider);
     assert.equal(quotaIcon.attrs.text_color[0], "muted");
-    if (provider === "opencode") {
-      assert.equal(icon.attrs.w[0], 10); assert.equal(icon.attrs.h[0], 12.5);
-    } else assert.equal(icon.attrs.size[0], ["kimi", "google"].includes(provider) ? 16 : 20);
-  }
-  const unknown = context.details({}, { providerID: "custom" }, null, null, "test");
-  assert.equal(nodes(unknown).some(n => n.attrs.asset), false);
-  assert.ok(text(unknown).startsWith("C"));
-  for (const [provider, mark] of [["kimi-code-plan-cn", "kimi"], ["kimi-for-coding", "kimi"], ["ollama-cloud", "ollama"], ["opencode-go", "opencode"]]) {
-    const root = context.details({ muted: "muted" }, { providerID: provider, modelID: "unknown-model" }, null, null, "test");
-    const icon = nodes(root).find(n => n.attrs.asset);
-    const path = `assets/trin-providers/${mark === "opencode" ? "opencode-logo" : mark}.svg`;
-    assert.equal(icon.attrs.asset[0], path);
-    if (mark === "opencode") {
-      assert.equal(icon.attrs.w[0], 10);
-      assert.equal(icon.attrs.h[0], 12.5);
-    } else assert.equal(icon.attrs.size[0], mark === "kimi" ? 16 : 20);
-    assert.ok(byID(root, "agent-test-model").attrs.tooltip[0].startsWith(provider + "/"));
-    assert.equal(nodes(root).some(n => n.childNodes.includes(provider[0].toUpperCase())), false);
   }
 });
 
-test("Agents updates the family mark from the current model without changing provider metadata", () => {
+test("Sessions reserves the former icon column without rendering a provider mark or initial", () => {
   const { panel, context } = fixture();
   context.layout = () => ({ id: "sidebar", size: { px: 268 } });
-  for (const [providerID, modelID, path] of [
-    ["openrouter", "openai/gpt-5.5", "assets/trin-providers/openai.svg"],
-    ["custom", "GPT 5.5", "assets/trin-providers/openai.svg"],
-    ["opencode-go", "o4-mini", "assets/trin-providers/openai.svg"],
-    ["custom", "claude-haiku-4-5", "assets/trin-providers/anthropic.svg"],
-    ["openrouter", "anthropic/claude-sonnet-5", "assets/trin-providers/anthropic.svg"],
-    ["openai", "Opus 5.5", "assets/trin-providers/anthropic.svg"],
-    ["openrouter", "anthropic/claude-fable-5.2", "assets/trin-providers/anthropic.svg"],
-    ["openrouter", "google/gemini-3.1-pro-preview:free", "mods/trin-agents/model-google.svg"],
-    ["google", "gemini-3.1-flash", "mods/trin-agents/model-google.svg"],
-    ["ollama", "gemma4:31b", "mods/trin-agents/model-google.svg"],
-    ["ollama", "inkling-2-mini:26b-a5b", "mods/trin-agents/model-thinking-machines.svg"],
-    ["local", "thinkingmachines/Inkling-2-Mini", "mods/trin-agents/model-thinking-machines.svg"],
-    ["opencode-go", "moonshotai/kimi-k2.5", "assets/trin-providers/kimi.svg"],
-    ["ollama", "gpt-tools/not-inkling", "assets/trin-providers/ollama.svg"],
-    ["opencode-go", "fablewriter", "assets/trin-providers/opencode-logo.svg"],
-    ["custom", "google/geminized", null],
-    ["custom", undefined, null],
-    [undefined, "gemini-3.1-pro", "mods/trin-agents/model-google.svg"],
+  context.modelLabel = id => id ?? "…";
+  for (const [providerID, modelID] of [
+    ["openrouter", "openai/gpt-5.5"],
+    ["openai", "Opus 5.5"],
+    ["opencode-go", "unclassified-model"],
+    ["custom", "unclassified-model"],
+    ["custom", undefined],
+    [undefined, "gemini-3.1-pro"],
   ]) {
     panel.activity.details = () => ({ providerID, modelID, variant: "medium" });
     const row = byID(panel.render(), "agent-t0-model");
-    const icon = nodes(row).find(n => n.attrs.asset);
-    assert.equal(icon?.attrs.asset[0] ?? null, path, `${providerID}/${modelID}`);
+    const [spacer, content] = row.childNodes;
+    assert.equal(row.childNodes.length, 2);
+    assert.equal(row.attrs.gap[0], 7);
+    assert.equal(spacer.attrs.w[0], 18);
+    assert.equal(spacer.attrs.h[0], 18);
+    assert.ok(spacer.attrs.flex_none);
+    assert.deepEqual(spacer.childNodes, []);
+    assert.ok(!nodes(row).some(n => n.attrs.asset));
+    assert.equal(text(content), `${modelID ?? "…"}@medium`);
     assert.equal(row.attrs.tooltip[0], modelID ? `${providerID ?? "?"}/${modelID} · medium` : "Model data unavailable");
-    if (path?.startsWith("mods/")) {
-      assert.equal(icon.attrs.size[0], 16);
-      assert.ok(fs.existsSync(new URL(`../${path}`, import.meta.url)), path);
-    }
   }
 });
 

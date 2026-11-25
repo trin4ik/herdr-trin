@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -41,14 +42,16 @@ function fixture(mod, initial, platform = "macos") {
   const source = fs.readFileSync(new URL(`../mods/${mod}/main.js`, import.meta.url), "utf8")
     .replace(/^import .*;\n/gm, "").replace("export default class", "class");
   const name = mod === "trin-tabs" ? "Tabs" : "Spaces";
-  const context = {
+  const context = { createHash,
     View: class {}, div: element, svg: element, image: element, h_flex: element, v_flex: element,
     spaces: () => list, panes: () => tabPanes, terminals: () => live, shared: key => sharedState[key], theme: () => ({}),
     window: () => ({ platform }), layout: () => structure, props: () => ({}), settings: () => ({ zoom: 1 }),
     run: (command, args) => commands.push({ command, args }),
     localStorage: { getItem: () => null, setItem() {} },
   };
-  vm.runInNewContext(source + `\nthis.Panel = ${name};`, context);
+  const projection = fs.readFileSync(new URL("../mods/trin-tabs/projection.js", import.meta.url), "utf8")
+    .replace(/^import .*;\n/gm, "").replace(/^export /gm, "");
+  vm.runInNewContext(projection + "\n" + source + `\nthis.Panel = ${name};`, context);
   const panel = new context.Panel();
   Object.assign(panel, { pressed: null, over: null, panels: {}, spaceAgents: new Map() });
   return { panel, commands, sharedState, setList: next => { list = next; },
@@ -231,6 +234,63 @@ test("tabs display the verified OpenCode title even if named, and do not reuse a
   terminal.pid = 13;
   assert.equal(name(), "User alias");
   assert.deepEqual(f.commands, []);
+});
+
+test("a display-only rename follows the same terminal and caption without a session report", () => {
+  const f = fixture("trin-tabs", [{ id: "space", active: true, tabs: [{ ...tab("a"), name: "Alias", named: true }] }]);
+  const terminal = { address: "t1", pid: 12, created_ms: 34, report: { app: "opencode", state: "idle" } };
+  const pane = { tab: "a", terminal: "t1", title: "OC | Previous title" };
+  f.setTerminals([terminal], [pane]);
+  const name = () => find(f.panel.render(), "tab-a").childNodes[1].childNodes[0];
+  const info = { sessionID: "ses_display", pid: 12, created: 34, caption: pane.title,
+    title: "Renamed on the server", presentationOnly: true };
+  f.sharedState["trin.sessions.titles"] = { t1: info };
+  assert.equal(name(), info.title);
+  pane.title = "OC | Another session";
+  assert.equal(name(), "Alias");
+  pane.title = info.caption;
+  terminal.created_ms++;
+  assert.equal(name(), "Alias");
+});
+
+test("only a verified explicit launch may suppress a working client with no native records", () => {
+  const list = [{ id: "home", tabs: [{ ...tab("a"), panes: 1 }] },
+    { id: "other", active: true, tabs: [{ ...tab("b"), panes: 1 }, tab("c")] }];
+  const f = fixture("trin-tabs", list), sid = "ses_specific";
+  const args = ["opencode", "--server", "http://fixture.invalid", "--session", sid];
+  const argsKey = createHash("sha256").update(JSON.stringify(args)).digest("hex");
+  const make = (address, pid) => ({ address, foreground: { pid, argv: [...args] }, created_ms: pid,
+    report: { app: "opencode", state: "working" } });
+  const ts = [make("t1", 1), make("t2", 2)];
+  f.setTerminals(ts, ts.map((t, i) => ({ terminal: t.address, tab: i ? "b" : "a", title: "caption", status: "working" })));
+  const titles = f.sharedState["trin.sessions.titles"] = Object.fromEntries(ts.map(t => [t.address, {
+    pid: t.foreground.pid, created: t.created_ms, caption: "caption", sessionID: sid, resumeProof: true, argsKey }]));
+  titles.t2.mirrorOf = { terminal: "t1", tab: "a", space: "home", sourceTab: "b", sourceSpace: "other" };
+  const visible = () => Boolean(find(f.panel.render(), "tab-b"));
+  assert.equal(visible(), false); titles.t1.resumeProof = false; assert.equal(visible(), true); titles.t1.resumeProof = true;
+  ts[1].foreground.argv[2] += "/changed"; assert.equal(visible(), true);
+  ts[1].foreground.argv = ["opencode", "--auto"];
+  titles.t2.argsKey = createHash("sha256").update(JSON.stringify(ts[1].foreground.argv)).digest("hex");
+  assert.equal(visible(), true, "same process, title, verified service and generic argv do not prove a session");
+});
+
+test("mirror-only cover releases the surviving active tab when its home disappears", () => {
+  const other = { id: "other", active: true, tabs: [{ ...tab("b"), active: true, panes: 1 }] };
+  const home = { id: "home", tabs: [{ ...tab("a"), panes: 1 }] };
+  const f = fixture("trin-tabs", [other, home]), sid = "ses_pair";
+  const report = { app: "opencode", state: "working", title: "Portal" };
+  const terms = [1, 2].map(pid => ({ address: `t${pid}`, pid, created_ms: pid, report, records: { [sid]: report } }));
+  const ps = terms.map((t, i) => ({ terminal: t.address, tab: i ? "b" : "a", pane: `p${i}`, title: "Portal" }));
+  f.setTerminals(terms, ps);
+  const argsKey = createHash("sha256").update("null").digest("hex");
+  const titles = f.sharedState["trin.sessions.titles"] = Object.fromEntries(terms.map(t => [t.address, {
+    sessionID: sid, pid: t.pid, created: t.pid, caption: "Portal", argsKey }]));
+  titles.t2.mirrorOf = { sourceTab: "b", sourceSpace: "other", tab: "a", space: "home", terminal: "t1" };
+  f.setLayout({ id: "session-body", active: "work-body" }); assert.ok(!find(f.panel.render(), "tab-b"));
+  assert.equal(f.commands.at(-1).args.child, "hidden-tabs-empty");
+  f.setLayout({ id: "session-body", active: "hidden-tabs-empty" });
+  f.setList([other]); f.setTerminals([terms[1]], [ps[1]]);
+  assert.ok(find(f.panel.render(), "tab-b")); assert.equal(f.commands.at(-1).args.child, "work-body");
 });
 
 test("OpenCode button uses the same project-root action as Command-T", () => {

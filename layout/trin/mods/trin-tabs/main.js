@@ -1,3 +1,4 @@
+import { mirrorTabs, verifiedTitle } from "./projection.js";
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, panes, terminals, run, openOverlay, theme, window, shared, layout, settings, props, checking, nextCommand } from "herdr";
@@ -11,19 +12,6 @@ function find(node, id) {
   return null;
 }
 
-function verifiedTitle(terminal, pane, value) {
-  if (!value || !terminal) return "";
-  const report = terminal.report;
-  const current = terminal.records?.[value.sessionID];
-  if (report?.app !== "opencode" && pane.program?.key !== "opencode") return "";
-  const matches = Object.values(terminal.records ?? {}).filter(r =>
-    r?.app === "opencode" && (!report || (r.state === report.state && r.title === report.title)));
-  if (matches.length) return matches.length === 1 && matches[0] === current ? value.title : "";
-  return value.pid === (terminal.foreground?.pid ?? terminal.pid ?? null)
-    && value.created === (terminal.created_ms ?? null) && value.caption === pane.title
-    ? value.title : "";
-}
-
 export default class Tabs extends View {
   init(_props, cx) {
     this.drag = null;
@@ -35,7 +23,8 @@ export default class Tabs extends View {
       while (!this.closed) {
         const command = await nextCommand();
         if (this.closed) return;
-        if (command === "close-current") this.closeOrHide();
+        if (command.startsWith("tab-")) this.navigate(command);
+        else if (command === "close-current") this.closeOrHide();
         else if (command.startsWith("close--")) {
           try { this.closeOrHide(decodeURIComponent(command.slice(7))); } catch { /* Invalid encoded ID. */ }
         }
@@ -45,11 +34,36 @@ export default class Tabs extends View {
 
   close() { this.drag = null; this.closed = true; }
 
+  mirrors(list) {
+    return mirrorTabs(list, panes(), new Map(terminals().map(t => [t.address, t])), shared("trin.sessions.titles") ?? {});
+  }
+
+  visible(space) {
+    const mirrors = this.mirrors(spaces());
+    return (space?.tabs ?? []).filter(t => !t.settled && !mirrors.has(t.id));
+  }
+
+  navigate(command) {
+    const list = spaces(), state = shared("trin.projects.v1");
+    const project = state?.projects?.find(p => p.id === state.selected);
+    const space = state ? list.find(s => s.id === project?.space) : list.find(s => s.active);
+    if (!space) return;
+    const shown = this.visible(space), current = shown.findIndex(t => t.active);
+    if (!shown.length) return;
+    let index;
+    if (command === "tab-next") index = (current + 1) % shown.length;
+    else if (command === "tab-prev") index = ((current < 0 ? 0 : current) - 1 + shown.length) % shown.length;
+    else if (/^tab-index--[1-9]$/.test(command)) index = Number(command.slice(11)) - 1;
+    if (shown[index]) run("tab.select", { id: shown[index].id });
+  }
+
   closeOrHide(id) {
     const list = spaces();
-    const tab = id ? list.flatMap(s => s.tabs).find(t => t.id === id)
-      : list.find(s => s.active)?.tabs.find(t => t.active);
-    if (!tab || tab.settled) return;
+    const state = shared("trin.projects.v1"), selected = state?.projects?.find(p => p.id === state.selected);
+    const space = state ? list.find(s => s.active && s.id === selected?.space) : list.find(s => s.active);
+    const tab = id ? (state ? space?.tabs : list.flatMap(s => s.tabs))?.find(t => t.id === id)
+      : space?.tabs.find(t => t.active);
+    if (!tab || tab.settled || this.mirrors(list).has(tab.id)) return;
     run(tab.status === "working" || tab.status === "blocked" ? "tab.settle" : "tab.close", { id: tab.id });
   }
 
@@ -63,9 +77,10 @@ export default class Tabs extends View {
     cx.stop_propagation();
     if (event.click_count === 2) { this.cancelDrag(cx); run("tab.rename", { id: tab.id }); return; }
     if (!event.bounds || !event.position) return;
-    const ids = space.tabs.filter(t => !t.settled).map(t => t.id);
+    const ids = this.visible(space).map(t => t.id);
     const widths = ids.map(id => id === tab.id ? event.bounds.width : this.widths.get(id) ?? 110);
     const from = ids.indexOf(tab.id);
+    if (from < 0) return;
     const left = widths.slice(0, from).reduce((sum, w) => sum + w, 0);
     this.drag = { id: tab.id, space: space.id, ids, widths, from, to: from,
       left, origin: event.position.x, x: 0, active: false };
@@ -76,7 +91,7 @@ export default class Tabs extends View {
   moveDrag(event, cx) {
     const d = this.drag;
     if (!d) return;
-    const current = (spaces().find(s => s.id === d.space)?.tabs ?? []).filter(t => !t.settled);
+    const current = this.visible(spaces().find(s => s.id === d.space));
     if (current.map(t => t.id).join("|") !== d.ids.join("|")) { this.cancelDrag(cx); return; }
     const dx = event.position.x - d.origin;
     if (!d.active && Math.abs(dx) < 5) return;
@@ -96,7 +111,7 @@ export default class Tabs extends View {
     this.drag = null;
     cx.stop_propagation();
     const all = spaces().find(s => s.id === d.space)?.tabs ?? [];
-    const current = all.filter(t => !t.settled);
+    const current = this.visible({ tabs: all });
     if (current.map(t => t.id).join("|") === d.ids.join("|")) {
       if (!d.active) {
         if (this.coveredTab === d.id) this.coveredTab = null;
@@ -151,22 +166,31 @@ export default class Tabs extends View {
     const projects = shared("trin.projects.v1");
     const project = projects?.projects?.find(p => p.id === projects.selected);
     const space = projects ? spaces().find(s => s.id === project?.space) : spaces().find(p => p.active);
-    const shown = (space?.tabs ?? []).filter(tab => !tab.settled);
+    const ps = panes(), titles = shared("trin.sessions.titles") ?? {};
+    const live = new Map(terminals().map(terminal => [terminal.address, terminal]));
+    const mirrors = mirrorTabs(spaces(), ps, live, titles);
+    const shown = (space?.tabs ?? []).filter(tab => !tab.settled && !mirrors.has(tab.id));
     const allHidden = Boolean(space?.tabs.length && !shown.length);
     const current = space?.tabs.find(tab => tab.active)?.id;
     if (this.coveredTab !== current) this.coveredTab = null;
-    if (allHidden) this.coveredTab = current;
+    // Only a deliberate settle remains covered after its native status changes.
+    // A mirror-only cover is derived anew and disappears with its proof.
+    if (allHidden && space.tabs.every(t => t.settled)) this.coveredTab = current;
     const reveal = shared("trin.sessions.reveal");
     if (reveal?.at !== this.restoreRequest) {
       this.restoreRequest = reveal?.at;
       if (!allHidden && reveal?.id === this.coveredTab) this.coveredTab = null;
     }
-    const covered = Boolean(this.coveredTab) || allHidden;
+    const mirrorActive = mirrors.has(current);
+    if (space?.active && mirrorActive && shown.length) {
+      const key = JSON.stringify([space.id, current, shown[0].id]);
+      if (this.repair !== key) run("tab.select", { id: shown[0].id });
+      this.repair = key;
+    } else this.repair = null;
+    const covered = Boolean(this.coveredTab) || allHidden || mirrorActive || Boolean(space && !space.active && projects);
     const root = layout();
     const bodyStack = find(root, "session-body"), want = covered ? "hidden-tabs-empty" : "work-body";
     if (bodyStack && bodyStack.active !== want) run("layout.select", { stack: "session-body", child: want });
-    const titles = shared("trin.sessions.titles") ?? {};
-    const live = new Map(terminals().map(terminal => [terminal.address, terminal]));
     this.widths ??= new Map();
     if (this.drag && (space?.id !== this.drag.space || shown.map(t => t.id).join("|") !== this.drag.ids.join("|"))) this.drag = null;
     for (const id of this.widths.keys()) if (!shown.some(t => t.id === id)) this.widths.delete(id);
@@ -174,11 +198,12 @@ export default class Tabs extends View {
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, ghost = false) => {
-      const tabPanes = panes().filter(p => p.tab === c.id);
-      const pane = tabPanes.find(p => p.program?.agent) ?? tabPanes.find(p => p.focused) ?? tabPanes[0];
+      const tabPanes = ps.filter(p => p.tab === c.id);
+      const pane = tabPanes.find(p => p.focused) ?? tabPanes.find(p => p.program?.agent) ?? tabPanes[0];
       const program = pane?.program;
       const title = (pane?.title ?? "").replace(/^(?:OC|OpenCode)\s*\|\s*/, "").trim();
-      const name = verifiedTitle(live.get(pane?.terminal), pane, titles[pane?.terminal])
+      const value = titles[pane?.terminal];
+      const name = (verifiedTitle(live.get(pane?.terminal), pane, value) && value.title)
         || (c.named ? c.name : title || program?.name || "Terminal");
       const running = c.status === "working" || c.status === "blocked";
       return h_flex().id(ghost ? "tab-drag-ghost" : `tab-${c.id}`).relative().h_full().min_w(110).px(14).gap(8).items_center().flex_none().text_size(13)
@@ -232,7 +257,7 @@ export default class Tabs extends View {
       .on_mouse_up("left", (_e, cx) => this.finishDrag(cx))
       .on_mouse_down_out((_e, cx) => this.cancelDrag(cx))
       .on_hover((over, cx) => { if (!over) this.cancelDrag(cx); })
-      .on_scroll_wheel(e => { if (!this.drag && space && Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "trin-projects.tab-prev" : "trin-projects.tab-next"); })
+      .on_scroll_wheel(e => { if (!this.drag && space && Math.abs(e.delta.y) >= 1) this.navigate(e.delta.y > 0 ? "tab-prev" : "tab-next"); })
       // Natural-width tabs keep New beside the last tab; only the tab list
       // shrinks/scrolls when full, leaving New and panel controls reachable.
       .child(h_flex().id("tab-strip").flex_1().min_w(0).h_full().gap(8).items_center()

@@ -2,9 +2,11 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, spaces, machines, exec, notify, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
-import { ActivityMonitor, isOpenCode, sessionAddress, terminalSessionID } from "./activity.js";
+import { agents, terminals, panes, spaces, machines, exec, notify, run, theme, shared, setShared, setAgentOrder, setBadge, layout, checking } from "herdr";
+import { ActivityMonitor } from "./activity.js";
+import { attachedAgents, isOpenCode, processArgsKey, sessionAddress } from "./identity.js";
 import { BackgroundAdmission } from "./background.js";
+import { BackgroundOpens } from "./opening.js";
 import { WorkingClock } from "./metrics.js";
 import { modelDescription, spaceAvatar, statusIndicator, sessionDetails } from "./appearance.js";
 import { parseOrder, orderedSessions, moveSession } from "./order.js";
@@ -47,12 +49,20 @@ function sessionName(tab, agent, canonical) {
   return canonical || (tab?.named ? tab.name : title || agent.program?.name)
     || tab?.name || "Agent";
 }
+// A native caption alone says nothing about the program behind a settled
+// tab. Only synthesize a row for a complete set of ordinary panes.
+function plainTabKey(tab, ps, ts) {
+  const list = ps.filter(p => p.tab === tab.id);
+  if (!list.length || list.length !== tab.panes || !list.every(p => p.mod ||
+    (p.program?.agent === false && ts.has(p.terminal) && !isOpenCode(p, ts.get(p.terminal))))) return null;
+  return JSON.stringify(list.map(p => [p.pane, p.terminal, p.mod, ts.get(p.terminal)?.created_ms]));
+}
 export default class Agents extends View {
   init(_props, cx) {
     this.order = parseOrder(localStorage.getItem(ORDER_KEY) ?? localStorage.getItem("pins"));
     this.drag = null;
     this.hiddenOpen = localStorage.getItem("sessions.hidden-open") === "true";
-    this.opening = new Map();
+    this.opening = new BackgroundOpens();
     this.backgroundAdmission = new BackgroundAdmission(parseOrder(localStorage.getItem(ATTACHED_KEY)));
     this.activity = new ActivityMonitor(shared(TITLES_KEY) ?? {});
     this.clock = new WorkingClock();
@@ -79,9 +89,43 @@ export default class Agents extends View {
     if (this.badge !== undefined) setBadge(null);
   }
 
+  currentAttachment(agent, expected) {
+    const sp = spaces(), all = new Map(terminals().map(t => [t.address, t]));
+    const space = sp.find(s => s.id === agent.space && s.tabs.some(t => t.id === agent.tab));
+    const ps = panes();
+    if (!all.has(agent.address) || !ps.some(p => p.pane === agent.pane && p.tab === agent.tab && p.terminal === agent.address)) return false;
+    const current = attachedAgents(agents(), ps, all, sp).find(a => a.address === agent.address
+      && a.pane === agent.pane && a.space === agent.space && a.tab === agent.tab);
+    if (!current || !space) return false;
+    return (this.activity.boundSessionID(current, all.get(current.address), false, space.machine ?? null) ?? null) === (expected ?? null);
+  }
+
   openBackground(agent, cx) {
-    this.opening ??= new Map();
-    if (this.opening.has(agent.address)) return;
+    this.opening ??= new BackgroundOpens();
+    // Attached status and the background list arrive independently. A click
+    // from the old frame must not launch again before the next render.
+    const sp = spaces(), ts = new Map(terminals().map(t => [t.address, t]));
+    const registry = shared("trin.projects.v1");
+    const homes = (registry?.projects ?? []).filter(p => (p.machine ?? null) === (agent.machine ?? null) && p.folder === agent.folder);
+    const owners = attachedAgents(agents(), panes(), ts, sp).filter(a => {
+      const s = sp.find(s => s.id === a.space && s.tabs.some(t => t.id === a.tab));
+      return s && (s.machine ?? null) === (agent.machine ?? null) && !ts.get(a.address)?.parent
+        && this.activity.boundSessionID(a, ts.get(a.address), false, s.machine) === agent.sessionID;
+    });
+    const last = this.opening.attached.get(agent.address);
+    const candidates = homes.length === 1 && owners.some(a => a.space === homes[0].space)
+      ? owners.filter(a => a.space === homes[0].space) : owners;
+    if (!candidates.length && last && ts.has(last.address)
+      && this.activity.boundSessionID(last, ts.get(last.address), false, agent.machine) === agent.sessionID) return;
+    const existing = candidates.find(a => a.address === last?.address) ?? candidates[0] ?? this.opening.pending.get(agent.address);
+    if (existing) {
+      if (existing.pane && !this.currentAttachment(existing, agent.sessionID)) return;
+      const project = registry?.projects?.find(p => p.space === existing.space);
+      if (project && project.id !== registry.selected) setShared("trin.projects.v1", { ...registry, selected: project.id });
+      if (existing.pane) run("pane.focus", { pane: existing.pane });
+      else if (existing.tab && sp.some(s => s.tabs.some(t => t.id === existing.tab))) run("tab.select", { id: existing.tab });
+      return;
+    }
     const { sessionID, folder, machine } = agent;
     if (!/^ses[A-Za-z0-9_-]+$/.test(sessionID ?? "") || typeof folder !== "string"
       || !/^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(folder) || /[\x00-\x1f]/.test(folder)) {
@@ -92,12 +136,11 @@ export default class Agents extends View {
       notify({ title: "Сессии", body: "Машина с этой сессией сейчас недоступна.", level: "error" });
       return;
     }
-    const scoped = spaces().filter(s => (s.machine ?? null) === (machine ?? null));
-    const registry = shared("trin.projects.v1");
+    const scoped = sp.filter(s => (s.machine ?? null) === (machine ?? null));
     const folderOf = s => registry?.projects?.find(p => p.space === s.id)?.folder ?? s.folder;
-    const space = scoped.find(s => folderOf(s) === folder) ?? scoped.find(s => s.active) ?? scoped[0];
-    const target = { tab: null };
-    this.opening.set(agent.address, target);
+    const matches = scoped.filter(s => folderOf(s) === folder);
+    const space = matches.length === 1 ? matches[0] : null;
+    const target = this.opening.begin(agent.address);
     cx.spawn(async cx => {
       try {
         const argv = ["opencode", "--session", sessionID];
@@ -107,23 +150,24 @@ export default class Agents extends View {
         if (result.code !== 0) throw Error("Не удалось открыть сессию OpenCode.");
         const reply = JSON.parse(result.stdout);
         if (!reply.tab || reply.error) throw Error("Herdr не подтвердил открытие вкладки.");
-        target.tab = reply.tab;
-        if (this.closed) return;
+        this.opening.acknowledge(target, reply, Date.now());
+        if (this.closed || shared("trin.projects.v1")?.selected !== registry?.selected) return;
         const state = shared("trin.projects.v1"), project = state?.projects?.find(p => p.space === (reply.space ?? space?.id));
         if (project && state.selected !== project.id) setShared("trin.projects.v1", { ...state, selected: project.id });
         run("tab.select", { id: reply.tab });
         cx.notify();
       } catch {
-        this.opening.delete(agent.address);
+        this.opening.cancel(agent.address, target);
         if (!this.closed) notify({ title: "Сессии", body: "Не удалось открыть сессию OpenCode.", level: "error" });
       }
     });
   }
 
-  admittedBackground(cx, claimed, unresolvedMachines, now) {
+  admittedBackground(cx, claimed, unresolvedMachines, now, openWakeAt) {
     this.backgroundAdmission ??= new BackgroundAdmission();
-    const { rows, wakeAt } = this.backgroundAdmission.update(this.activity.backgroundRows?.() ?? [],
+    const { rows, wakeAt: admissionWakeAt } = this.backgroundAdmission.update(this.activity.backgroundRows?.() ?? [],
       claimed, unresolvedMachines, now);
+    const wakeAt = Math.min(admissionWakeAt, openWakeAt);
     if (cx && wakeAt !== this.backgroundWakeAt) {
       this.backgroundTimer?.cancel();
       this.backgroundWakeAt = wakeAt;
@@ -206,25 +250,36 @@ export default class Agents extends View {
     // new target immediately rather than waiting for the 5s retry timer.
     if (cx && this.live) this.activity?.refresh(cx);
     const collapsed = narrow();
+    const ps = panes();
     const all = new Map(terminals().map(terminal => [terminal.address, terminal]));
     const sp = spaces();
     const spaceById = new Map(sp.map(s => [s.id, s]));
     const tabs = new Map(sp.flatMap(s => s.tabs).map(tab => [tab.id, tab]));
     const aliases = new Map(), attached = new Map(), sessionIDs = new Map(), excluded = new Set();
     const owners = new Map();
+    const openCodeByTab = new Map();
     const unresolvedMachines = new Set();
-    const titles = {};
+    const titles = {}, groups = new Map();
+    const projects = shared("trin.projects.v1")?.projects ?? [];
+    const directoryProjects = (machine, folder) => projects.filter(p => folder && p.folder === folder && (p.machine ?? null) === machine);
+    const occupied = new Set();
     // `agents()` can also contain a child that was kept as a tab. Its
     // parent link is independent of whether the terminal has its own pane.
-    for (const agent of agents()) {
+    for (const agent of attachedAgents(agents(), ps, all, sp)) {
       const terminal = all.get(agent.address);
-      if (terminal?.parent) continue;
-      const sessionID = this.activity.boundSessionID?.(agent, terminal) ?? terminalSessionID(terminal);
+      occupied.add(agent.tab);
+      if (!terminal || terminal.parent) continue;
       const machine = spaceById.get(agent.space)?.machine ?? null;
+      this.activity.checkPresentation?.(agent, terminal, machine);
+      const sessionID = spaceById.has(agent.space) ? this.activity.boundSessionID(agent, terminal, false, machine) : null;
       if (!sessionID && isOpenCode(agent, terminal) && (agent.status === "working" || agent.status === "blocked")) {
         unresolvedMachines.add(machine);
       }
       const id = sessionID ? sessionAddress(machine, sessionID) : agent.address;
+      if (isOpenCode(agent, terminal)) {
+        if (!openCodeByTab.has(agent.tab)) openCodeByTab.set(agent.tab, []);
+        openCodeByTab.get(agent.tab).push({ address: agent.address, identity: sessionID ? id : null });
+      }
       const session = this.activity.session?.(agent, sessionID);
       if (session?.excluded) {
         excluded.add(id);
@@ -235,19 +290,58 @@ export default class Agents extends View {
         aliases.set(agent.address, id);
         if (!owners.has(id)) owners.set(id, new Set());
         owners.get(id).add(agent.address);
-        const title = typeof session?.sessionTitle === "string"
-          ? [...session.sessionTitle.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim()].slice(0, 256).join("") : "";
-        if (title) titles[agent.address] = { sessionID, title, caption: agent.title ?? "",
-          pid: terminal?.foreground?.pid ?? terminal?.pid ?? null, created: terminal?.created_ms ?? null };
       }
+      const display = session ?? (!sessionID ? this.activity.presentation?.(agent) : null);
+      const title = typeof display?.sessionTitle === "string"
+        ? [...display.sessionTitle.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim()].slice(0, 256).join("") : "";
+      const hint = !sessionID ? this.activity.presentationHint?.(agent) : null;
+      const client = this.activity.explicitClient?.(agent);
+      if (title) titles[agent.address] = { ...hint, ...client, sessionID: sessionID ?? display.sessionID, title, caption: agent.title ?? "",
+        pid: terminal?.foreground?.pid ?? terminal?.pid ?? null, created: terminal?.created_ms ?? null,
+        ...(!sessionID ? { presentationOnly: true, machine } : {}) };
+      if (title && sessionID) titles[agent.address].proofCaption = this.activity.bindings?.get(agent.address)?.proofCaption;
+      else if (!title && (hint || client)) titles[agent.address] = { ...hint, ...client, title: "" };
       const attention = agent.status === "done" || agent.status === "blocked";
       const hidden = Boolean(tabs.get(agent.tab)?.settled) && !attention;
-      const previous = attached.get(id);
-      if (!previous || (previous.hidden && !hidden) || (previous.hidden === hidden
-        && ((agent.focused && !previous.agent.focused) || (agent.focused === previous.agent.focused
-          && (ATTENTION[agent.status] ?? 0) > (ATTENTION[previous.agent.status] ?? 0))))) {
-        attached.set(id, { id, agent, hidden });
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id).push({ id, agent, hidden, folder: session?.sessionFolder });
+    }
+    for (const [id, group] of groups) {
+      // Only a bound session's own directory can settle cross-project ownership.
+      // Neither the focused pane, launch cwd nor a native tab caption proves it.
+      const folders = [...new Set(group.map(r => r.folder).filter(Boolean))];
+      const machine = spaceById.get(group[0].agent.space)?.machine ?? null;
+      const matches = directoryProjects(machine, folders.length === 1 && folders[0]);
+      const home = matches.length === 1 ? group.filter(r => r.agent.space === matches[0].space) : [];
+      const preferredSpace = home.length ? home[0].agent.space : group.map(r => r.agent.space).sort()[0];
+      const candidates = group.filter(r => r.agent.space === preferredSpace);
+      const rank = r => Number(!r.hidden) * 16 + Number(Boolean(r.agent.focused)) * 4 + (ATTENTION[r.agent.status] ?? 0);
+      const best = candidates.reduce((a, b) => rank(b) > rank(a) ? b : a);
+      attached.set(id, best);
+      if (home.length && group.some(r => r.agent.space !== best.agent.space)) {
+        const sid = sessionIDs.get(best.agent.address);
+        const name = titles[best.agent.address]?.title || group.map(r => titles[r.agent.address]?.title).find(Boolean);
+        for (const { agent } of group) {
+          const term = all.get(agent.address);
+          if (!term) continue;
+          const value = titles[agent.address] ??= {};
+          Object.assign(value, { sessionID: sid, caption: agent.title ?? "",
+            pid: term.foreground?.pid ?? term.pid, created: term.created_ms });
+          value.proofCaption = this.activity.bindings?.get(agent.address)?.proofCaption;
+          value.argsKey = processArgsKey(term);
+          const proof = this.activity.resumeProof?.(agent, term, machine, sid);
+          if (proof) value.resumeProof = proof;
+          value.title ||= name || "";
+          if (agent.space !== best.agent.space) value.mirrorOf = {
+            sourceTab: agent.tab, sourceSpace: agent.space, terminal: best.agent.address, tab: best.agent.tab, space: best.agent.space };
+        }
       }
+    }
+    // A terminal can drop out of agents() temporarily without going away.
+    for (const address of all.keys()) {
+      if (Object.hasOwn(titles, address)) continue;
+      const client = this.activity.explicitClient?.({ address });
+      if (client) titles[address] = { ...client, title: "" };
     }
     const titleSignature = JSON.stringify(titles);
     if (this.live && titleSignature !== this.titleSignature) {
@@ -257,7 +351,6 @@ export default class Agents extends View {
     const roots = [...attached.values()].map(row => row.agent);
     this.working = roots.some(a => a.status === "working");
     if (this.live !== false) this.updateBadge(roots);
-    const projects = shared("trin.projects.v1")?.projects ?? [];
     const spaceOf = a => {
       if (a.background) {
         const at = projects.filter(p => p.folder === a.folder && p.machine === a.machine);
@@ -265,15 +358,22 @@ export default class Agents extends View {
       }
       const s = spaceById.get(a.space) ?? { id: a.space, name: a.space_name };
       const p = projects.find(p => p.space === a.space);
-      return p ? { ...s, name: p.name, color: p.color } : s;
+      return p ? { ...s, name: p.name, color: p.color, folder: p.folder, machine: p.machine } : s;
     };
     const focusAgent = (a, cx) => {
       if (a.background) {
-        const existing = this.opening?.get(a.address)?.tab;
-        if (existing) run("tab.select", { id: existing });
-        else this.openBackground(a, cx);
+        this.openBackground(a, cx);
         return;
       }
+      const current = spaces().find(s => s.id === a.space)?.tabs.find(t => t.id === a.tab);
+      if (!current) return;
+      const expected = sessionIDs.get(a.address);
+      if (expected) {
+        const owner = this.opening.attached.get(sessionAddress(spaceById.get(a.space)?.machine, expected));
+        if (owner?.address !== a.address) return;
+      }
+      if (a.pane ? !this.currentAttachment(a, expected) : (!current.settled || agents().some(agent => agent.tab === a.tab)
+        || plainTabKey(current, panes(), new Map(terminals().map(t => [t.address, t]))) !== a.plainKey)) return;
       const state = shared("trin.projects.v1"), p = state?.projects?.find(p => p.space === a.space);
       if (p && state.selected !== p.id) setShared("trin.projects.v1", { ...state, selected: p.id });
       if (a.pane) run("pane.focus", { pane: a.pane });
@@ -284,31 +384,35 @@ export default class Agents extends View {
     };
     // Track work time even when the compact rail doesn't show it.
     const now = Date.now();
-    this.clock.sync(roots, a => this.activity.details(a, sessionIDs.get(a.address)), now);
+    const details = a => {
+      const sid = sessionIDs.get(a.address), own = this.activity.details(a, sid);
+      if (own || !sid) return own;
+      for (const row of groups.get(aliases.get(a.address)) ?? []) {
+        if (row.agent.address === a.address) continue;
+        const meta = this.activity.details(row.agent, sid);
+        if (meta) return meta;
+      }
+      return null;
+    };
+    this.clock.sync(roots, details, now);
     const claimed = new Set([...attached.keys(), ...excluded]);
+    this.opening ??= new BackgroundOpens();
+    const pendingOpen = this.opening.reconcile(tabs, attached, openCodeByTab, all, now, ps);
+    for (const id of pendingOpen.claimed) claimed.add(id);
     this.backgroundAdmission ??= new BackgroundAdmission();
     if (this.backgroundAdmission.remember(owners, all) && this.live) {
       localStorage.setItem(ATTACHED_KEY, JSON.stringify([...this.backgroundAdmission.seen]));
     }
-    for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now)) {
+    for (const agent of this.admittedBackground(cx, claimed, unresolvedMachines, now, pendingOpen.wakeAt)) {
       attached.set(agent.address, { id: agent.address, agent });
     }
     const rows = [...attached.values()].filter(item => !item.hidden);
     const hidden = [...attached.values()].filter(item => item.hidden);
-    // A launcher may still be coming up, before it reports enough for agents().
-    const represented = new Set([...attached.values()].map(item => item.agent.tab));
     for (const space of sp) for (const tab of space.tabs) {
-      if (tab.settled && tab.status !== "blocked" && tab.status !== "done" && !represented.has(tab.id)) {
-        hidden.push({ agent: { address: `hidden-tab:${tab.id}`, space: space.id, tab: tab.id,
-          title: tab.name, status: tab.status ?? "idle" } });
-      }
-    }
-    for (const [id, opening] of this.opening ?? []) {
-      if (!opening.tab) continue;
-      const present = tabs.has(opening.tab);
-      if ((opening.present && !present) || !rows.some(item => item.id === id && item.agent.background)) {
-        this.opening.delete(id);
-      } else if (present) opening.present = true;
+      if (!tab.settled || tab.status === "blocked" || tab.status === "done" || occupied.has(tab.id)) continue;
+      const plainKey = plainTabKey(tab, ps, all);
+      if (plainKey) hidden.push({ agent: { address: `hidden-tab:${tab.id}`, space: space.id, tab: tab.id,
+        plainKey, title: tab.name, status: tab.status ?? "idle" } });
     }
     this.renderOrder = [...new Set(this.order.map(id => aliases.get(id) ?? id))];
     this.rows = orderedSessions(rows, this.renderOrder);
@@ -316,13 +420,13 @@ export default class Agents extends View {
       || (this.drag.over && !rows.some(row => row.id === this.drag.over)))) this.drag = null;
     if (this.live !== false) setAgentOrder(this.rows.filter(row => !row.agent.background).map(row => row.agent.address));
 
-  const label = (a) => sessionName(tabs.get(a.tab), a, titles[a.address]?.title);
+    const label = (a) => sessionName(tabs.get(a.tab), a, titles[a.address]?.title);
 
     const rowHeight = collapsed ? RAIL_ROW_HEIGHT : WIDE_ROW_HEIGHT;
     const row = (a, bottomPadding = 0) => {
       const pic = spaceAvatar(spaceOf(a), t);
       const sid = sessionIDs.get(a.address);
-      const meta = a.background ? a.meta : this.activity?.details(a, sid);
+      const meta = a.background ? a.meta : details(a);
       const backgroundHint = a.background ? `Фоновая сессия · ${a.machine ?? "Этот компьютер"}` : null;
       const ready = a.status === "done";
       if (collapsed) {

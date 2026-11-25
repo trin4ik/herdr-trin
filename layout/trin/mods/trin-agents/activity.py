@@ -290,7 +290,8 @@ def session_metrics(api, session, target, running, model_cache=None):
 
 
 def match_session(api, target, cache=None):
-    sid = target.get("sessionID")
+    probe = target.get("resumeProbe")
+    sid = target.get("sessionID") or (probe.get("id") if probe else None)
     if sid:
         item = (cache or {}).get(sid) or api.get("/api/session/" + urllib.parse.quote(sid, safe=""))["data"]
         return item if item["id"] == sid else None
@@ -330,13 +331,43 @@ def match_session(api, target, cache=None):
     exact = {sid: item for sid, item in unique.items() if item.get("title") == title}
     if exact:
         unique = exact
-    if len(unique) == 1:
-        return next(iter(unique.values()))
     # Launch cwd can differ from the session's location. Use it only to
     # disambiguate equal titles, never pick the first/most recently used session.
-    cwd = target.get("cwd")
-    same_place = [s for s in unique.values() if s.get("location", {}).get("directory") == cwd]
-    return same_place[0] if len(same_place) == 1 else None
+    candidates = list(unique.values())
+    if len(candidates) > 1:
+        cwd = target.get("cwd")
+        candidates = [s for s in candidates if s.get("location", {}).get("directory") == cwd]
+    match = candidates[0] if len(candidates) == 1 else None
+    previous = target.get("presentationID")
+    if previous:
+        # A second session can reuse the old caption while the terminal still
+        # shows it. Withdraw the display rather than switching to another ID.
+        if unique:
+            return match if match and match["id"] == previous else None
+        try:
+            item = (cache or {}).get(previous) or api.get("/api/session/" + urllib.parse.quote(previous, safe=""))["data"]
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        return item if item.get("id") == previous else None
+    return match
+
+
+def same_service(api, candidate):
+    def endpoint(url):
+        parts = urllib.parse.urlsplit(url)
+        if (parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None
+                or parts.query or parts.fragment):
+            return None
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        return parts.scheme, parts.hostname, port, parts.path.rstrip("/")
+
+    try:
+        registered = endpoint(api.url)
+        return registered is not None and registered == endpoint(candidate)
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def hidden_session(session):
@@ -452,6 +483,11 @@ def collect(api, targets, *, active=None, cache=None, output=None):
     matched = {}
     model_cache = {}
     for target in targets:
+        probe = target.get("resumeProbe")
+        if target.get("foreignService") or (probe and not same_service(api, probe.get("server"))):
+            output[target["address"]] = {"title": target["title"], "resumeVerified": False,
+                                         "error": "OpenCode terminal service is not confirmed"}
+            continue
         try:
             session = match_session(api, target, cache)
         except Exception:
@@ -460,14 +496,18 @@ def collect(api, targets, *, active=None, cache=None, output=None):
                 output[target["address"]]["sessionID"] = target["sessionID"]
             continue
         if session is None:
-            output[target["address"]] = {"title": target["title"], "error": "Session match is missing or ambiguous"}
+            output[target["address"]] = {"title": target["title"], "matchMissing": True,
+                                         "error": "Session match is missing or ambiguous"}
             continue
         cache[session["id"]] = session
         output[target["address"]] = {"title": target["title"], "sessionID": session["id"],
                                      "sessionTitle": session.get("title")}
+        if probe and (not probe.get("id") or session["id"] == probe["id"]):
+            output[target["address"]]["resumeVerified"] = True
         if hidden_session(session):
             output[target["address"]]["excluded"] = True
             continue
+        output[target["address"]]["sessionFolder"] = (session.get("location") or {}).get("directory")
         matched[target["address"]] = session["id"]
     if not matched:
         return output

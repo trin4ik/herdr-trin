@@ -1,14 +1,15 @@
 // Projects preserve the incumbent Spaces sidebar: same native rows, machine
 // headers, avatars and rail. Only identity/lifetime changes; cwd is session data.
-import { View, div, svg } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, agents, machines, focused, run, nextCommand, exec, theme, shared, setShared, props, layout, notify, knownAgents, openOverlay } from "herdr";
+import { spaces, agents, machines, focused, run, nextCommand, exec, theme, shared, setShared, props, layout, notify, knownAgents, openOverlay, checking } from "herdr";
 import { MARK, adopt, liveSpace, machineReady, projectForSpace, selectedProject, updateProject, moveProject, removeProject, launchArgs, launchLocked } from "./data.js";
 import { seeds } from "./migration.js";
 import { read, write, command, overlay } from "./store.js";
 import { initSurface, renderSurface, renderStatus } from "./ui.js";
 import { disposeRemoteFolderPicker } from "./remote-picker.js";
 import { nativeActions, nativeSignature } from "./native.js";
+import { ProjectIcons, projectIcon } from "./project-icons.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -43,6 +44,7 @@ export default class Projects extends View {
 
   close() {
     this.closed = true;
+    this.icons?.close();
     disposeRemoteFolderPicker(this);
   }
 
@@ -338,7 +340,11 @@ export default class Projects extends View {
     const status = list.reduce((best, a) => (rank[a.status] ?? 0) > (rank[best] ?? 0) ? a.status : best, null);
     const working = list.some(a => a.status === "working");
     const title = `${p.name}\n${p.machine ?? "This computer"}\n${p.folder}\n${!available ? "Машина недоступна / подключается" : `${s?.tabs?.length ?? 0} сессий`}${p.pending ? "\nРезультат предыдущего запуска ещё не подтверждён" : ""}\nПеретащите выше/ниже в пределах машины`;
-    const avatar = size => h_flex().size(size).flex_none().rounded(5).bg(fill).items_center().justify_center().font_bold().text_color("#ffffff").text_size(collapsed ? 12 : 10.5).child([...p.name][0]?.toUpperCase() ?? "?");
+    const icon = projectIcon(p);
+    const avatar = size => h_flex().size(size).flex_none().rounded(5).overflow_hidden().items_center().justify_center()
+      .when(Boolean(icon), el => el.child(image(icon).size_full()))
+      .when(!icon, el => el.bg(fill).font_bold().text_color("#ffffff").text_size(collapsed ? 12 : 10.5)
+        .child([...p.name][0]?.toUpperCase() ?? "?"));
     if (collapsed) return this.draggableProject(h_flex().id(`project-${p.id}`).relative().h(36).flex_none().justify_center().items_center().cursor_pointer().tooltip(title), p)
       .when(this.projectDragging && this.pressed === p.id, el => el.opacity(0.5))
       .when(this.projectDragging && this.over === p.id && this.pressed !== p.id, el => el.child(this.projectDropLine(p, t)))
@@ -367,6 +373,10 @@ export default class Projects extends View {
     let state;
     try { state = read(); } catch (e) { return div().p(12).text_color(t.blocked).child(String(e.message ?? e)); }
     const rows = this.ordered(state);
+    if (cx && !checking()) {
+      this.icons ??= new ProjectIcons();
+      this.icons.sync(rows, machines(), cx);
+    }
     const remote = [...new Set([...rows.map(p => p.machine), ...machines().map(m => m.name)].filter(Boolean))].sort();
     const groups = collapsed ? rows.map(p => this.row(p, t, true)) : [null, ...remote].flatMap(machine => {
       const mine = rows.filter(p => p.machine === machine), folded = this.folded?.has(machine);
